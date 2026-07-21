@@ -911,6 +911,15 @@ def _definitive_place_rejection_reasons(error: TestnetProbeError) -> tuple[str, 
             "COPY_ORDER_NOTIONAL_BELOW_EXCHANGE_MINIMUM",
             "COPY_EXCHANGE_CODE_4164",
         )
+    if code == -4411:
+        # Binance uses this synchronous rejection for TradFi perpetuals when the
+        # account has not accepted the product agreement.  No order is created,
+        # so this is an operator-resolvable account prerequisite rather than an
+        # uncertain submission or a fault in the copy executor.
+        return (
+            "COPY_TRADIFI_AGREEMENT_REQUIRED",
+            "COPY_EXCHANGE_CODE_4411",
+        )
     return (
         "COPY_ORDER_REJECTED_BY_EXCHANGE",
         f"COPY_EXCHANGE_CODE_{abs(code)}",

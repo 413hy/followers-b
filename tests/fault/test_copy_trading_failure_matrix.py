@@ -1281,6 +1281,28 @@ def test_runtime_full_source_exit_closes_system_recorded_leader_position() -> No
     assert repository.ledger.position_for(reduction).local_quantity == Decimal("0")
 
 
+def test_tradifi_agreement_rejection_is_not_reported_as_a_system_incident() -> None:
+    signal = _signal()
+    repository = FakeRepository(assignments=(_assignment(),), ingested=(signal,))
+    executor = FakeExecutor(
+        CopyExecutionState.REJECTED,
+        reason_codes=(
+            "COPY_TRADIFI_AGREEMENT_REQUIRED",
+            "COPY_EXCHANGE_CODE_4411",
+        ),
+    )
+    incidents: list[str] = []
+
+    _runtime(repository, FakePublic(), executor, incidents).run_cycle()
+
+    assert repository.decisions[-1] == (
+        signal.signal_id,
+        "RISK_REJECTED",
+        ("COPY_TRADIFI_AGREEMENT_REQUIRED", "COPY_EXCHANGE_CODE_4411"),
+    )
+    assert incidents == []
+
+
 def test_reduction_after_unfilled_addition_closes_the_older_owned_position() -> None:
     old_increase = _signal()
     pending = replace(

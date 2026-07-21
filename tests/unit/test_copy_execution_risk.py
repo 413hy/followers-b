@@ -749,6 +749,30 @@ def test_explicit_exchange_rejection_is_terminal_not_uncertain() -> None:
     assert journal.events[-1].state == "REJECTED"
 
 
+def test_tradifi_agreement_rejection_is_an_explicit_account_prerequisite() -> None:
+    client = FakeClient()
+    journal = FakeJournal()
+
+    def reject_unsigned_agreement(params: dict[str, str]) -> dict[str, Any]:
+        client.placed.append(params)
+        raise ProbeError("PLACE_ORDER_HTTP_400_CODE_-4411")
+
+    client.place_order = reject_unsigned_agreement  # type: ignore[method-assign]
+    receipt = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW,
+    ).execute(_protected_order(), risk_decision=_risk())
+
+    assert receipt.state is CopyExecutionState.REJECTED
+    assert receipt.reason_codes == (
+        "COPY_TRADIFI_AGREEMENT_REQUIRED",
+        "COPY_EXCHANGE_CODE_4411",
+    )
+    assert client.queried == []
+    assert journal.events[-1].state == "REJECTED"
+
+
 def test_missing_claimed_order_after_grace_becomes_terminal_rejection() -> None:
     client = FakeClient()
     journal = FakeJournal()

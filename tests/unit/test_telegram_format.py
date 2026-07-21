@@ -182,6 +182,35 @@ def test_margin_capacity_rejection_is_a_clear_keyboard_free_risk_skip() -> None:
     assert _notification_contextual_view(payload) is None
 
 
+def test_tradifi_agreement_rejection_explains_exchange_state_and_operator_action() -> None:
+    payload = {
+        "event": "copy_signal_decision",
+        "state": "RISK_REJECTED",
+        "symbol": "NVDAUSDT",
+        "position_side": "SHORT",
+        "signal_kind": "INCREASE",
+        "local_quantity": "0.24",
+        "lead_portfolio_id": "5117780547953263617",
+        "leader_nickname": "领航量化观势",
+        "leader_reference_price": "205.14",
+        "source_occurred_at": "2026-07-21T14:03:00+00:00",
+        "occurred_at": "2026-07-21T14:05:10+00:00",
+        "reason_codes": [
+            "COPY_TRADIFI_AGREEMENT_REQUIRED",
+            "COPY_EXCHANGE_CODE_4411",
+        ],
+    }
+
+    text = _notification_text(payload)
+
+    assert text.startswith("\n⚠️ Binance 合约协议未开通\nNVDAUSDT")
+    assert "Binance 已在撮合前拒绝请求" in text
+    assert "没有生成订单、没有成交、也没有仓位残留" in text
+    assert "签署协议后, 才能重新提交" in text
+    assert text.count("-4411") == 0
+    assert "COPY_" not in text
+
+
 def test_source_reduction_cancellation_is_one_chinese_business_reason() -> None:
     payload = {
         "event": "copy_signal_decision",

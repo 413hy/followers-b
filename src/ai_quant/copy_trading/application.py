@@ -725,6 +725,21 @@ class CopyTradingRuntime:
                 receipt.reason_codes,
                 outcome_at,
             )
+        elif (
+            receipt.state is CopyExecutionState.REJECTED
+            and "COPY_TRADIFI_AGREEMENT_REQUIRED" in receipt.reason_codes
+        ):
+            # The exchange definitively rejected the request before creating an
+            # order because this account has not accepted the TradFi perpetual
+            # agreement.  It is an explicit account prerequisite: do not classify
+            # it as a system failure or wake Codex to repair healthy code.
+            self._record_decision(
+                signal,
+                "RISK_REJECTED",
+                receipt.requested_quantity,
+                receipt.reason_codes,
+                outcome_at,
+            )
         else:
             self._record_decision(
                 signal,

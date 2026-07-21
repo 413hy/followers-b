@@ -4058,6 +4058,8 @@ def _notification_text_raw(
         reason.startswith("COPY_NEW_ENTRIES_") for reason in reason_codes
     ):
         title = "⏸️ 新开仓已暂停"
+    elif state == "RISK_REJECTED" and "COPY_TRADIFI_AGREEMENT_REQUIRED" in reason_codes:
+        title = "⚠️ Binance 合约协议未开通"
     elif state == "RISK_REJECTED":
         title = "🛡️ 风控跳过"
     elif state == "CANCELLED" and kind == "INCREASE":
@@ -4115,7 +4117,7 @@ def _notification_text_raw(
     pnl_suffix = _order_pnl_suffix(payload)
     if pnl_suffix:
         lines.append(_card_text(pnl_suffix).strip())
-    system_action = _signal_system_action(state, kind=kind)
+    system_action = _signal_system_action(state, kind=kind, reason_codes=reason_codes)
     if system_action:
         lines.append(f"系统处理: {system_action}")
     if reasons and state not in {"SUBMITTED", "FILLED"}:
@@ -4152,6 +4154,7 @@ def _signal_reason_text(reason_codes: tuple[str, ...]) -> str:
     has_protected_limit_reason = any(
         reason.startswith("COPY_PROTECTED_LIMIT_") for reason in reason_codes
     )
+    has_tradifi_prerequisite = "COPY_TRADIFI_AGREEMENT_REQUIRED" in reason_codes
     translated: list[str] = []
     for reason in reason_codes:
         if has_protected_limit_reason and reason in {
@@ -4161,6 +4164,10 @@ def _signal_reason_text(reason_codes: tuple[str, ...]) -> str:
             # Older persisted notifications may contain both the semantic reason
             # and Binance's generic terminal status.  They describe one event, so
             # only show the actionable semantic explanation to the operator.
+            continue
+        if has_tradifi_prerequisite and reason == "COPY_EXCHANGE_CODE_4411":
+            # The semantic reason already includes Binance's original error and
+            # the exact operator action.  Avoid showing the same cause twice.
             continue
         label = labels.get(reason, reason_code_text(reason))
         if label not in translated:
@@ -4197,7 +4204,12 @@ def _codex_action_text(actions: Any, *, state: str) -> str:
     return "; ".join(dict.fromkeys(translated))
 
 
-def _signal_system_action(state: str, *, kind: str) -> str:
+def _signal_system_action(
+    state: str,
+    *,
+    kind: str,
+    reason_codes: tuple[str, ...] = (),
+) -> str:
     """Explain the consequence of a non-success state without exposing internals."""
 
     if state == "RECEIVED":
@@ -4216,6 +4228,11 @@ def _signal_system_action(state: str, *, kind: str) -> str:
         )
     if state == "SHADOW_ONLY":
         return "只保存带单员信号, 当前运行模式不会向 Binance 提交订单"
+    if state == "RISK_REJECTED" and "COPY_TRADIFI_AGREEMENT_REQUIRED" in reason_codes:
+        return (
+            "Binance 已在撮合前拒绝请求; 系统确认原订单未生成、未成交且无仓位残留, "
+            "不会自动反复下单"
+        )
     if state in {"IGNORED_MINIMUM", "IGNORED_DRAINING", "RISK_REJECTED"}:
         return "未向 Binance 提交订单"
     if state == "FAILED":

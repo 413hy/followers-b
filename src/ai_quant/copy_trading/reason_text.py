@@ -30,6 +30,16 @@ _LABELS = {
     "COPY_ORDER_EXPIRED": "交易所确认订单已过期",
     "COPY_ORDER_REJECTED": "交易所拒绝了订单",
     "COPY_ORDER_REJECTED_BY_EXCHANGE": "交易所拒绝了本次下单",
+    "COPY_TRADIFI_AGREEMENT_REQUIRED": (
+        "Binance 账户尚未签署 TradFi 永续合约协议; 交易所在订单进入撮合前已拒绝请求, "
+        "因此没有生成订单、没有成交、也没有仓位残留; 登录对应的 Binance 测试盘或正式盘"
+        "签署协议后, 才能重新提交这笔跟单"
+    ),
+    "COPY_EXCHANGE_CODE_4411": "Binance 原始错误码 -4411 (尚未签署 TradFi 永续合约协议)",
+    "COPY_TRADIFI_AGREEMENT_RETRY_REQUESTED": (
+        "已确认协议签署完成, 正在按原信号、原数量和原限价受控重新提交; "
+        "原委托不存在, 本次不会造成重复开仓"
+    ),
     "COPY_EXCHANGE_CODE_4016": (
         "提交限价高于 Binance 当时允许的动态价格上限; "
         "订单在进入撮合前已被拒绝, 没有成交或仓位残留"
