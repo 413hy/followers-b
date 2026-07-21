@@ -3243,16 +3243,7 @@ class PostgresTelegramState:
             configured_entry_limit = _current_entry_margin_limit(cursor)
         if row is None:
             return "💹 系统盈亏\n等待下一次 10 秒账户估值。"
-        raw_total = Decimal(str(row["total_pnl_usdt"]))
-        total = raw_total - Decimal(str(row["reset_total_pnl_usdt"]))
-        today = raw_total - Decimal(str(row["day_anchor_pnl_usdt"]))
-        month = raw_total - Decimal(str(row["month_anchor_pnl_usdt"]))
-        realized = Decimal(str(row["realized_net_pnl_usdt"])) - Decimal(
-            str(row["reset_realized_net_pnl_usdt"])
-        )
-        unrealized = Decimal(str(row["unrealized_pnl_usdt"])) - Decimal(
-            str(row["reset_unrealized_pnl_usdt"])
-        )
+        total, today, month, realized, unrealized = _account_pnl_since_reset(row)
         net_account_adjustment = _net_account_adjustment(total, line_rows)
         envelope = Decimal(str(row["operating_envelope_usdt"]))
         displayed_equity = _rebased_logical_equity(envelope, total)
@@ -4643,6 +4634,32 @@ def _net_account_adjustment(
         Decimal("0"),
     )
     return account_total_pnl - line_gross_pnl
+
+
+def _account_pnl_since_reset(
+    row: Mapping[str, Any],
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    """Return account PnL, hiding the stale valuation frame immediately after reset."""
+
+    observed_at = row.get("observed_at")
+    reset_occurred_at = row.get("reset_occurred_at")
+    if (
+        isinstance(observed_at, datetime)
+        and isinstance(reset_occurred_at, datetime)
+        and observed_at < reset_occurred_at
+    ):
+        zero = Decimal("0")
+        return zero, zero, zero, zero, zero
+    raw_total = Decimal(str(row["total_pnl_usdt"]))
+    return (
+        raw_total - Decimal(str(row["reset_total_pnl_usdt"])),
+        raw_total - Decimal(str(row["day_anchor_pnl_usdt"])),
+        raw_total - Decimal(str(row["month_anchor_pnl_usdt"])),
+        Decimal(str(row["realized_net_pnl_usdt"]))
+        - Decimal(str(row["reset_realized_net_pnl_usdt"])),
+        Decimal(str(row["unrealized_pnl_usdt"]))
+        - Decimal(str(row["reset_unrealized_pnl_usdt"])),
+    )
 
 
 def _position_pnl_text(row: Mapping[str, Any]) -> str:

@@ -13,6 +13,7 @@ from ai_quant.copy_trading.telegram_format import (
 )
 from ai_quant.copy_trading.telegram_state import (
     PostgresTelegramState,
+    _account_pnl_since_reset,
     _card_text,
     _control_message,
     _net_account_adjustment,
@@ -713,6 +714,26 @@ def test_dashboard_equity_restarts_from_the_operating_envelope() -> None:
     assert _rebased_logical_equity(Decimal("150"), Decimal("0")) == Decimal("150")
     assert _rebased_logical_equity(Decimal("150"), Decimal("1.25")) == Decimal("151.25")
     assert _rebased_logical_equity(Decimal("150"), Decimal("-200")) == Decimal("0")
+
+
+def test_account_pnl_is_zero_during_the_post_reset_valuation_window() -> None:
+    reset_at = datetime(2026, 7, 21, 15, 27, 6, tzinfo=UTC)
+    values = _account_pnl_since_reset(
+        {
+            "observed_at": reset_at - timedelta(seconds=7),
+            "reset_occurred_at": reset_at,
+            "total_pnl_usdt": Decimal("0.4754"),
+            "reset_total_pnl_usdt": Decimal("0"),
+            "day_anchor_pnl_usdt": Decimal("0"),
+            "month_anchor_pnl_usdt": Decimal("0"),
+            "realized_net_pnl_usdt": Decimal("0.4754"),
+            "reset_realized_net_pnl_usdt": Decimal("0"),
+            "unrealized_pnl_usdt": Decimal("0"),
+            "reset_unrealized_pnl_usdt": Decimal("0"),
+        }
+    )
+
+    assert values == (Decimal("0"),) * 5
 
 
 def test_account_adjustment_uses_reset_line_totals() -> None:
