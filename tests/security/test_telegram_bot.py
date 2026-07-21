@@ -1677,6 +1677,7 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
     )
     prompt = str(calls[-1][1]["text"])
     assert calls[-1][1]["reply_markup"]["force_reply"] is True  # type: ignore[index]
+    assert "详情链接" in prompt
 
     base = {"chat": {"id": 42}, "from": {"id": 42}}
     router.handle(
@@ -1690,6 +1691,33 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
     )
     assert admin.external == [(42, LeaderSlot.CUSTOM_2, "5014426348046646785")]
     assert calls[-1][1]["text"] == "confirm external leader"
+
+    router.handle(
+        {
+            "message": {
+                **base,
+                "text": (
+                    "https://www.binance.com/zh-TW/copy-trading/lead-details/"
+                    "4788776444236355328?timeRange=30D"
+                ),
+                "reply_to_message": {"text": prompt},
+            }
+        }
+    )
+    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_2, "4788776444236355328")
+    assert calls[-1][1]["text"] == "confirm external leader"
+
+    router.handle(
+        {
+            "message": {
+                **base,
+                "text": "https://example.com/lead-details/4788776444236355328",
+                "reply_to_message": {"text": prompt},
+            }
+        }
+    )
+    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_2, "4788776444236355328")
+    assert "ID或Binance详情链接" in str(calls[-1][1]["text"])
 
     router.handle(
         {
@@ -1712,7 +1740,10 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             }
         }
     )
-    assert admin.external == [(42, LeaderSlot.CUSTOM_2, "5014426348046646785")]
+    assert admin.external == [
+        (42, LeaderSlot.CUSTOM_2, "5014426348046646785"),
+        (42, LeaderSlot.CUSTOM_2, "4788776444236355328"),
+    ]
     assert calls[-1][1]["text"] == "你没有带单员管理权限。"
 
 

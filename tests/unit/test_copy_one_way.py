@@ -10,6 +10,7 @@ import pytest
 
 from ai_quant.copy_trading.binance_public import (
     BINANCE_WEB_BASE,
+    COPY_ORDER_POLL_PAGE_SIZE,
     POSITION_HISTORY_PATH,
     BinancePublicCopyClient,
     ClosedLeaderPosition,
@@ -306,7 +307,7 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
 
         def order_history(self, lead_portfolio_id: str, *, page_size: int) -> OrderHistoryPage:
             assert lead_portfolio_id == LEADER_ID
-            assert page_size == 100
+            assert page_size == COPY_ORDER_POLL_PAGE_SIZE
             return OrderHistoryPage(orders=orders, total=len(orders))
 
         def position_history(

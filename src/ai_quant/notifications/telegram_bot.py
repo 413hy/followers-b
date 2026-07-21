@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from ai_quant.copy_trading.leader_slots import (
     LeaderSlot,
@@ -30,6 +31,10 @@ _INTERNAL_REASON_CODE = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
 _NOTIFICATION_TOKEN = re.compile(r"^[0-9a-f]{16}$")
 _NOTIFICATION_CALLBACK = re.compile(r"^n:([0-9a-f]{16}):(.+)$")
 _TELEGRAM_CALLBACK_DATA_LIMIT = 64
+_BINANCE_LEADER_PATH = re.compile(
+    r"^/(?:[A-Za-z]{2}(?:-[A-Za-z]{2})?/)?copy-trading/lead-details/"
+    r"([0-9]{10,24})/?$"
+)
 
 
 def bounded_telegram_text(text: str) -> str:
@@ -538,7 +543,7 @@ class TelegramMenuRouter:
             except ValueError:
                 self._client.send_message(
                     chat_id,
-                    "带单员命令格式: /leader_set custom1 5014426348046646785, "
+                    "带单员命令格式: /leader_set custom1 <ID或Binance详情链接>, "
                     "或 /leader_find custom1 名称。",
                 )
                 return
@@ -901,14 +906,14 @@ class TelegramMenuRouter:
             except ValueError:
                 self._answer_callback(callback_id, "未知席位")
                 return
-            self._answer_callback(callback_id, "请回复 ID 或名称")
+            self._answer_callback(callback_id, "请回复链接、ID 或名称")
             self._client.send_message(
                 chat_id,
                 _leader_input_prompt(slot),
                 reply_markup={
                     "force_reply": True,
                     "selective": True,
-                    "input_field_placeholder": "输入带单员 ID 或完整/部分名称",
+                    "input_field_placeholder": "粘贴 Binance 链接、ID 或名称",
                 },
             )
             return
@@ -1920,7 +1925,7 @@ def _parse_update(
             reply_text = reply.get("text") if isinstance(reply, dict) else None
             slot = _leader_input_reply_slot(reply_text) if isinstance(reply_text, str) else None
             if slot is not None:
-                value = f"/leader_input {leader_slot_callback(slot)} {text[:80]}"
+                value = f"/leader_input {leader_slot_callback(slot)} {text[:256]}"
             elif isinstance(reply_text, str) and _entry_margin_input_reply(reply_text):
                 value = f"/margin_input {text[:32]}"
             else:
@@ -2019,13 +2024,36 @@ def _message_leader_command(text: str) -> tuple[str, LeaderSlot, str] | None:
         raise ValueError("Telegram leader command is invalid")
     slot = leader_slot_from_callback(parts[1].lower())
     query = parts[2].strip()
-    if not query or len(query) > 80 or "\n" in query or "\r" in query:
+    if not query or len(query) > 256 or "\n" in query or "\r" in query:
         raise ValueError("Telegram leader query is invalid")
-    if command == "/leader_set" or (command == "/leader_input" and query.isdecimal()):
-        if not re.fullmatch(r"[0-9]{10,24}", query):
+    leader_id = _binance_leader_reference_id(query)
+    if command == "/leader_set" or (
+        command == "/leader_input" and leader_id is not None
+    ):
+        if leader_id is None:
             raise ValueError("Telegram leader portfolio ID is invalid")
-        return "SET", slot, query
+        return "SET", slot, leader_id
+    if query.lower().startswith(("http://", "https://")):
+        raise ValueError("Telegram Binance leader URL is invalid")
     return "FIND", slot, query
+
+
+def _binance_leader_reference_id(value: str) -> str | None:
+    if re.fullmatch(r"[0-9]{10,24}", value):
+        return value
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.netloc.lower() != "www.binance.com"
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    matched = _BINANCE_LEADER_PATH.fullmatch(parsed.path)
+    return matched.group(1) if matched is not None else None
 
 
 def _leader_admin_reason_code(error: ValueError | RuntimeError) -> str:
@@ -2053,7 +2081,8 @@ def _leader_admin_error_text(reason_code: str) -> str:
 def _leader_input_prompt(slot: LeaderSlot) -> str:
     return (
         f"✍️ 输入{leader_slot_label(slot)}带单员\n"
-        "请直接回复带单员 ID, 或回复完整/部分名称进行搜索。\n"
+        "请直接回复 Binance 带单员详情链接、带单员 ID, "
+        "或回复完整/部分名称进行搜索。\n"
         "系统会实时读取公开资料和最近操作, 之后仍需二次确认。"
     )
 

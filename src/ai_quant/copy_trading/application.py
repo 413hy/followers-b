@@ -17,6 +17,7 @@ from ai_quant.copy_trading.allocation import (
     SymbolTradingRules,
 )
 from ai_quant.copy_trading.binance_public import (
+    COPY_ORDER_POLL_PAGE_SIZE,
     BinancePublicCopyClient,
     BinancePublicCopyError,
     OrderHistoryPage,
@@ -218,7 +219,7 @@ class CopyTradingRuntime:
                 if baseline:
                     page = self._public.order_history(
                         assignment.lead_portfolio_id,
-                        page_size=100,
+                        page_size=COPY_ORDER_POLL_PAGE_SIZE,
                     )
                 else:
                     watermark = self._repository.source_watermark(assignment.lead_portfolio_id)

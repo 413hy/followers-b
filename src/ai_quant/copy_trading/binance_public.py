@@ -26,6 +26,8 @@ POSITION_HISTORY_PATH = (
     "/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/position-history"
 )
 MAX_PUBLIC_RESPONSE_BYTES = 4 * 1024 * 1024
+COPY_ORDER_POLL_PAGE_SIZE = 30
+_FAST_LEADER_LOOKUP_RANKINGS = ("AUM", "WIN_RATE", "MDD")
 
 
 class BinancePublicCopyError(RuntimeError):
@@ -168,6 +170,21 @@ class BinancePublicCopyClient:
             raise ValueError("copy leader portfolio ID is invalid")
         if time_range not in {"7D", "30D", "90D"} or not 1 <= maximum_pages <= 100:
             raise ValueError("copy leader lookup range is invalid")
+        # Detail links can point to a popular leader buried deep in the ROI ranking.
+        # Check complementary first pages before retaining the complete ROI fallback.
+        for data_type in _FAST_LEADER_LOOKUP_RANKINGS:
+            try:
+                rows, _ = self._leader_rows(
+                    page_number=1,
+                    page_size=100,
+                    time_range=time_range,
+                    data_type=data_type,
+                )
+            except BinancePublicCopyError:
+                continue
+            leader = _leader_with_id(rows, lead_portfolio_id)
+            if leader is not None:
+                return leader
         for page_number in range(1, maximum_pages + 1):
             rows, total = self._leader_rows(
                 page_number=page_number,
@@ -175,15 +192,9 @@ class BinancePublicCopyClient:
                 time_range=time_range,
                 data_type="ROI",
             )
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    continue
-                if str(row.get("leadPortfolioId")) != lead_portfolio_id:
-                    continue
-                try:
-                    return LeaderSnapshot.from_api(_require_mapping(row))
-                except PublicCopyDataError as error:
-                    raise BinancePublicCopyError("COPY_LEADER_LOOKUP_INVALID") from error
+            leader = _leader_with_id(rows, lead_portfolio_id)
+            if leader is not None:
+                return leader
             if page_number * 100 >= total:
                 break
         raise BinancePublicCopyError("COPY_LEADER_LOOKUP_NOT_FOUND")
@@ -269,6 +280,21 @@ class BinancePublicCopyClient:
         page_number: int = 1,
         page_size: int = 50,
     ) -> OrderHistoryPage:
+        return self._order_history_page(
+            lead_portfolio_id,
+            page_number=page_number,
+            page_size=page_size,
+            identity_guard_after_ms=None,
+        )
+
+    def _order_history_page(
+        self,
+        lead_portfolio_id: str,
+        *,
+        page_number: int,
+        page_size: int,
+        identity_guard_after_ms: int | None,
+    ) -> OrderHistoryPage:
         if not 1 <= page_number <= 10_000 or not 1 <= page_size <= 100:
             raise ValueError("copy order-history page is outside the supported range")
         data = self._post(
@@ -290,7 +316,14 @@ class BinancePublicCopyClient:
             )
         except PublicCopyDataError as error:
             raise BinancePublicCopyError(str(error)) from error
-        identities = [order.identity_key for order in orders]
+        guarded_orders = (
+            orders
+            if identity_guard_after_ms is None
+            else tuple(
+                order for order in orders if order.update_time_ms >= identity_guard_after_ms
+            )
+        )
+        identities = [order.identity_key for order in guarded_orders]
         if len(identities) != len(set(identities)):
             # The public endpoint exposes no exchange order ID. Two rows with the
             # same derived identity cannot be safely distinguished from cumulative
@@ -387,10 +420,11 @@ class BinancePublicCopyClient:
         first_total = 0
         covered = False
         for page_number in range(1, maximum_pages + 1):
-            page = self.order_history(
+            page = self._order_history_page(
                 lead_portfolio_id,
                 page_number=page_number,
                 page_size=page_size,
+                identity_guard_after_ms=after_update_time_ms,
             )
             if page_number == 1:
                 first_total = page.total
@@ -480,6 +514,17 @@ def _require_mapping(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise PublicCopyDataError("COPY_ROW_INVALID")
     return value
+
+
+def _leader_with_id(rows: list[object], lead_portfolio_id: str) -> LeaderSnapshot | None:
+    for row in rows:
+        if not isinstance(row, Mapping) or str(row.get("leadPortfolioId")) != lead_portfolio_id:
+            continue
+        try:
+            return LeaderSnapshot.from_api(_require_mapping(row))
+        except PublicCopyDataError as error:
+            raise BinancePublicCopyError("COPY_LEADER_LOOKUP_INVALID") from error
+    return None
 
 
 def _position_quantity(value: object, field: str) -> Decimal:

@@ -158,6 +158,37 @@ def test_public_directory_can_find_id_or_name_without_trusting_unrelated_bad_row
     assert [leader.lead_portfolio_id for leader in matches] == ["5014426348046646785"]
 
 
+def test_public_directory_resolves_popular_link_id_from_fast_aum_ranking() -> None:
+    target_id = "4788776444236355328"
+    target = {
+        **_leader(),
+        "leadPortfolioId": target_id,
+        "nickname": "意钦",
+        "currentCopyCount": 999,
+        "maxCopyCount": 1000,
+    }
+    requested: list[tuple[str, int]] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers
+        request = json.loads(body)
+        requested.append((str(request["dataType"]), int(request["pageNumber"])))
+        if request["dataType"] == "AUM":
+            return _response({"list": [target], "total": 1})
+        raise AssertionError("deep ROI fallback should not be needed")
+
+    leader = BinancePublicCopyClient(transport=transport).find_leader(target_id)
+
+    assert leader.nickname == "意钦"
+    assert leader.current_copy_count == 999
+    assert requested == [("AUM", 1)]
+
+
 def test_identical_source_order_from_two_leaders_has_independent_identity_and_signal() -> None:
     raw = {
         "symbol": "ETHUSDT",
@@ -217,6 +248,41 @@ def test_order_history_catch_up_pages_until_persisted_watermark() -> None:
 
     assert calls == [1, 2]
     assert [order.update_time_ms for order in page.orders] == [200, 300, 400]
+
+
+def test_order_history_catch_up_ignores_ambiguity_older_than_persisted_watermark() -> None:
+    def row(*, quantity: str, price: str, order_time: int, update_time: int) -> dict[str, object]:
+        return {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "LIMIT",
+            "positionSide": "SHORT",
+            "executedQty": quantity,
+            "avgPrice": price,
+            "totalPnl": "0",
+            "orderTime": order_time,
+            "orderUpdateTime": update_time,
+        }
+
+    old_ladder_orders = [
+        row(quantity="1", price="60000", order_time=100, update_time=100),
+        row(quantity="2", price="60100", order_time=100, update_time=150),
+    ]
+    recent_order = row(quantity="1", price="60200", order_time=300, update_time=300)
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [recent_order, *old_ladder_orders], "total": 3}
+        )
+    )
+
+    page = client.order_history_since(
+        "5108371059752839168",
+        after_update_time_ms=200,
+        page_size=100,
+        maximum_pages=1,
+    )
+
+    assert [order.update_time_ms for order in page.orders] == [300]
 
 
 def test_order_history_catch_up_fails_closed_when_page_budget_cannot_cover_watermark() -> None:

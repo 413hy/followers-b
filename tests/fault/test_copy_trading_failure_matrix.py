@@ -15,6 +15,7 @@ from ai_quant.copy_trading.application import (
     _account_position_marks,
 )
 from ai_quant.copy_trading.binance_public import (
+    COPY_ORDER_POLL_PAGE_SIZE,
     BinancePublicCopyError,
     ClosedLeaderPosition,
     OrderHistoryPage,
@@ -94,7 +95,7 @@ class FakePublic:
         self.position_calls: list[str] = []
 
     def order_history(self, leader_id: str, *, page_size: int) -> OrderHistoryPage:
-        assert page_size == 100
+        assert page_size in {COPY_ORDER_POLL_PAGE_SIZE, 100}
         self.calls.append(leader_id)
         if leader_id in self.failing:
             raise BinancePublicCopyError("COPY_ORDER_HISTORY_API_REJECTED")

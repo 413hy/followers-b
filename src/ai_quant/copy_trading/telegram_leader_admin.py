@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from ai_quant.copy_trading.binance_public import (
+    COPY_ORDER_POLL_PAGE_SIZE,
     BinancePublicCopyClient,
     BinancePublicCopyError,
 )
@@ -195,7 +196,14 @@ class LiveTelegramLeaderAdmin:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("copy manual leader clock must be timezone-aware")
         now = now.astimezone(UTC)
-        history = self._public.order_history(leader.lead_portfolio_id, page_size=100)
+        # Binance's public history has no stable source order ID. Some leaders place
+        # same-millisecond ladder orders, so a compact recent window avoids unrelated
+        # historical identity collisions while preserving the fail-closed guard for
+        # genuinely ambiguous new operations.
+        history = self._public.order_history(
+            leader.lead_portfolio_id,
+            page_size=COPY_ORDER_POLL_PAGE_SIZE,
+        )
         orders = history.orders
         if any(order.position_side.value == "BOTH" for order in orders):
             try:
