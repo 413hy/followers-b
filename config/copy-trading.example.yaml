@@ -45,8 +45,7 @@ portfolio:
   default_leverage: 10
   leverage_selection: EXCHANGE_MAXIMUM
   maximum_leverage: 125
-  maximum_order_margin_usdt: "10"
-  maximum_symbol_margin_usdt: "20"
+  maximum_order_margin_usdt: "5"
   follow_multiplier_scope: PER_LEADER_ID
   follow_multiplier_default: 1
   follow_multiplier_minimum: 1

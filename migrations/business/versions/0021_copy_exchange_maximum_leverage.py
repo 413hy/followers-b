@@ -1,4 +1,4 @@
-"""Use exchange-maximum leverage and enforce a 10 USDT per-order margin policy."""
+"""Allow exchange-maximum leverage in persisted copy-trading events."""
 
 from alembic import op
 

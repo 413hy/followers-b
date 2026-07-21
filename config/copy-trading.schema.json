@@ -67,7 +67,7 @@
     "portfolio": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operating_envelope_usdt", "entry_allocation_usdt", "reserve_usdt", "default_leverage", "leverage_selection", "maximum_leverage", "maximum_order_margin_usdt", "maximum_symbol_margin_usdt", "follow_multiplier_scope", "follow_multiplier_default", "follow_multiplier_minimum", "follow_multiplier_maximum", "insufficient_margin_action", "single_order_priority", "quantity_rounding", "minimum_notional_action"],
+      "required": ["operating_envelope_usdt", "entry_allocation_usdt", "reserve_usdt", "default_leverage", "leverage_selection", "maximum_leverage", "maximum_order_margin_usdt", "follow_multiplier_scope", "follow_multiplier_default", "follow_multiplier_minimum", "follow_multiplier_maximum", "insufficient_margin_action", "single_order_priority", "quantity_rounding", "minimum_notional_action"],
       "properties": {
         "operating_envelope_usdt": { "const": "150" },
         "entry_allocation_usdt": { "const": "120" },
@@ -75,8 +75,7 @@
         "default_leverage": { "type": "integer", "minimum": 1, "maximum": 20 },
         "leverage_selection": { "const": "EXCHANGE_MAXIMUM" },
         "maximum_leverage": { "const": 125 },
-        "maximum_order_margin_usdt": { "const": "10" },
-        "maximum_symbol_margin_usdt": { "const": "20" },
+        "maximum_order_margin_usdt": { "const": "5" },
         "follow_multiplier_scope": { "const": "PER_LEADER_ID" },
         "follow_multiplier_default": { "const": 1 },
         "follow_multiplier_minimum": { "const": 1 },

@@ -340,7 +340,7 @@ class CodexDailySelector:
             "leader_count": leader_count,
             "operating_envelope_usdt": "150",
             "shared_margin_budget": True,
-            "maximum_order_margin_usdt": "10",
+            "maximum_order_margin_usdt": "5",
             "leverage_selection": "EXCHANGE_MAXIMUM",
             "sizing_policy": "MATCH_SOURCE_NOTIONAL_WITHIN_AVAILABLE_SHARED_CAPACITY",
             "position_mode": "HEDGE_WITH_PER_LEADER_VIRTUAL_LEDGER",

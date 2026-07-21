@@ -1448,8 +1448,8 @@ def test_entry_sizes_minimum_notional_at_submitted_limit_without_ticker_query() 
 def test_new_entry_uses_only_its_assigned_leader_multiplier() -> None:
     signal = replace(
         _signal(),
-        source_delta_quantity=Decimal("0.03"),
-        source_cumulative_quantity=Decimal("0.03"),
+        source_delta_quantity=Decimal("0.01"),
+        source_cumulative_quantity=Decimal("0.01"),
     )
     repository = FakeRepository(
         assignments=(_assignment(follow_multiplier=3),),
@@ -1459,7 +1459,7 @@ def test_new_entry_uses_only_its_assigned_leader_multiplier() -> None:
 
     _runtime(repository, FakePublic(), executor).run_cycle()
 
-    assert executor.orders[0].local_quantity == Decimal("0.090")
+    assert executor.orders[0].local_quantity == Decimal("0.030")
     assert executor.orders[0].leverage == 20
 
 

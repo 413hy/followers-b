@@ -164,7 +164,7 @@ def test_allocator_preserves_source_notional_when_local_entry_price_moves() -> N
     assert decision.local_notional_usdt == Decimal("200.000")
 
 
-def test_multiplier_cannot_bypass_symbol_margin_cap() -> None:
+def test_multiplier_cannot_bypass_order_margin_cap() -> None:
     decision = ProportionalAllocator().size_increase(
         _signal(source_quantity="300"),
         market_price=Decimal("2000"),
@@ -179,12 +179,12 @@ def test_multiplier_cannot_bypass_symbol_margin_cap() -> None:
     )
 
     assert decision.approved
-    assert decision.local_quantity == Decimal("0.250")
-    assert decision.committed_margin_usdt == Decimal("10")
+    assert decision.local_quantity == Decimal("0.125")
+    assert decision.committed_margin_usdt == Decimal("5")
     assert decision.leverage == 50
 
 
-def test_allocator_uses_exchange_maximum_leverage_to_preserve_source_target() -> None:
+def test_allocator_uses_exchange_maximum_before_clamping_to_order_margin() -> None:
     decision = ProportionalAllocator().size_increase(
         _signal(source_quantity="0.24"),
         market_price=Decimal("2000"),
@@ -198,10 +198,10 @@ def test_allocator_uses_exchange_maximum_leverage_to_preserve_source_target() ->
     )
 
     assert decision.approved
-    assert decision.local_quantity == Decimal("0.240")
-    assert decision.local_notional_usdt == Decimal("480")
+    assert decision.local_quantity == Decimal("0.125")
+    assert decision.local_notional_usdt == Decimal("250.000")
     assert decision.leverage == 50
-    assert decision.committed_margin_usdt == Decimal("9.600")
+    assert decision.committed_margin_usdt == Decimal("5.000")
 
 
 @pytest.mark.parametrize("multiplier", [0, 11])
@@ -262,8 +262,8 @@ def test_allocator_never_exceeds_exchange_or_policy_leverage() -> None:
     )
     assert decision.approved
     assert decision.leverage == 5
-    assert decision.local_quantity == Decimal("0.025")
-    assert decision.committed_margin_usdt == Decimal("10.000")
+    assert decision.local_quantity == Decimal("0.012")
+    assert decision.committed_margin_usdt == Decimal("4.800")
 
 
 def test_later_small_fill_raises_existing_symbol_to_exchange_maximum_leverage() -> None:
@@ -322,7 +322,7 @@ def test_empty_symbol_uses_exchange_maximum_instead_of_stale_current_leverage() 
     assert decision.committed_margin_usdt == Decimal("2.000")
 
 
-def test_allocator_uses_exchange_maximum_with_remaining_symbol_margin() -> None:
+def test_existing_symbol_margin_does_not_create_a_separate_capacity_cap() -> None:
     decision = ProportionalAllocator().size_increase(
         _signal(source_quantity="0.1"),
         market_price=Decimal("2000"),
@@ -331,7 +331,7 @@ def test_allocator_uses_exchange_maximum_with_remaining_symbol_margin() -> None:
             source_aum_usdt=Decimal("100000"),
             portfolio_weight=Decimal("1"),
         ),
-        usage=_usage(symbol="10"),
+        usage=_usage(total="50", leader="50", symbol="50"),
         rules=_rules(),
     )
 
@@ -382,7 +382,7 @@ def test_too_little_remaining_margin_is_reported_as_capacity_not_exchange_minimu
     assert decision.reason_codes == ("COPY_SIZE_TOTAL_MARGIN_CAP_REACHED",)
 
 
-def test_allocator_reports_symbol_margin_cap_when_exchange_minimum_no_longer_fits() -> None:
+def test_large_existing_symbol_position_can_use_remaining_shared_capacity() -> None:
     decision = ProportionalAllocator().size_increase(
         _signal(source_quantity="5", reference_price="1865.81"),
         market_price=Decimal("1865.81"),
@@ -391,7 +391,7 @@ def test_allocator_reports_symbol_margin_cap_when_exchange_minimum_no_longer_fit
             source_aum_usdt=Decimal("100000"),
             portfolio_weight=Decimal("0.25"),
         ),
-        usage=_usage(total="53.62", leader="26", symbol="19.965451"),
+        usage=_usage(total="53.62", leader="26", symbol="53.62"),
         rules=SymbolTradingRules(
             quantity_step=Decimal("0.001"),
             minimum_quantity=Decimal("0.001"),
@@ -401,8 +401,9 @@ def test_allocator_reports_symbol_margin_cap_when_exchange_minimum_no_longer_fit
         ),
     )
 
-    assert not decision.approved
-    assert decision.reason_codes == ("COPY_SIZE_SYMBOL_MARGIN_CAP_REACHED",)
+    assert decision.approved
+    assert decision.committed_margin_usdt <= Decimal("5")
+    assert decision.reason_codes == ()
 
 
 def test_allocator_raises_tiny_source_fill_to_exchange_minimum() -> None:

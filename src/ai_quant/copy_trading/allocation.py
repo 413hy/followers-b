@@ -15,8 +15,7 @@ class PortfolioAllocationPolicy:
     reserve_usdt: Decimal = Decimal("30")
     default_leverage: int = 10
     maximum_leverage: int = 125
-    maximum_order_margin_usdt: Decimal = Decimal("10")
-    maximum_symbol_margin_usdt: Decimal = Decimal("20")
+    maximum_order_margin_usdt: Decimal = Decimal("5")
 
     def __post_init__(self) -> None:
         if self.operating_envelope_usdt <= 0:
@@ -27,8 +26,6 @@ class PortfolioAllocationPolicy:
             raise ValueError("copy leverage policy is invalid")
         if not 0 < self.maximum_order_margin_usdt <= self.entry_allocation_usdt:
             raise ValueError("copy order margin cap is invalid")
-        if not 0 < self.maximum_symbol_margin_usdt <= self.entry_allocation_usdt:
-            raise ValueError("copy symbol margin cap is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +161,8 @@ class ProportionalAllocator:
         # Slot weights describe selection priority, not hard capital partitions. A hard
         # per-leader partition strands otherwise available margin whenever one line is
         # temporarily inactive and incorrectly drops valid hedge-side entries from the
-        # active leader. Global, per-symbol and per-order caps remain authoritative.
+        # active leader. Only the global shared pool and per-order cap constrain an
+        # individual symbol; repeated fills on one symbol may use the remaining pool.
         margin_capacities = (
             (
                 "COPY_SIZE_TOTAL_MARGIN_CAP_REACHED",
@@ -175,10 +173,6 @@ class ProportionalAllocator:
                 account_available_balance - self._policy.reserve_usdt,
             ),
             ("COPY_SIZE_ORDER_MARGIN_CAP_REACHED", self._policy.maximum_order_margin_usdt),
-            (
-                "COPY_SIZE_SYMBOL_MARGIN_CAP_REACHED",
-                self._policy.maximum_symbol_margin_usdt - usage.symbol_committed_margin_usdt,
-            ),
         )
         binding_margin_reason, available_margin = min(
             margin_capacities,
