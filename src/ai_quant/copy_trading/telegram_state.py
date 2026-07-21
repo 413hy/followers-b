@@ -28,7 +28,10 @@ from ai_quant.copy_trading.reason_text import (
     translate_reason_codes_in_text,
 )
 from ai_quant.copy_trading.repository import CopyRepositoryError, CopyTradingRepository
-from ai_quant.copy_trading.risk import logical_available_balance
+from ai_quant.copy_trading.risk import (
+    available_entry_margin_balance,
+    logical_available_balance,
+)
 from ai_quant.copy_trading.telegram_format import (
     compact_decimal,
     compact_money,
@@ -459,12 +462,17 @@ class PostgresTelegramState:
             )
         except CopyRepositoryError as error:
             raise TelegramStateError("TELEGRAM_ACCOUNT_SUMMARY_RESET_FAILED") from error
+        reset_time = occurred_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime(
+            "%m-%d %H:%M:%S"
+        )
         return (
             "✅ 账户汇总已初始化\n"
             "当前净值已重新以 150 U 为起点; 今日、本月、累计、各条线、"
             "各带单员和各仓位盈亏均从现在重新计为 0。\n"
-            "可用保证金已扣除当前仓位和待入场订单的真实占用后重新计算; "
-            "仓位、订单、带单员与额度配置均未修改。"
+            f"统计起点: {reset_time}\n"
+            "可用开仓保证金余额已按“共享上限减已成交占用和待入场预留”重算; "
+            "仓位、订单、带单员与额度配置均未修改。\n"
+            "说明: 归零后现有仓位仍在交易, 后续浮动盈亏会从 0 继续实时变化。"
         )
 
     def position_leader_choices(self) -> tuple[PositionLeaderChoice, ...]:
@@ -2989,22 +2997,27 @@ class PostgresTelegramState:
         pending_margin = Decimal(str(pending["pending"])) if pending else Decimal("0")
         reserve = Decimal("30")
         current_entry_limit = configured_entry_limit
-        remaining = max(
-            Decimal("0"),
-            current_entry_limit - committed - pending_margin,
+        used_entry_margin = committed + pending_margin
+        remaining = available_entry_margin_balance(
+            account_unoccupied_usdt=account_available,
+            entry_margin_limit_usdt=current_entry_limit,
+            committed_margin_usdt=committed,
+            pending_margin_usdt=pending_margin,
         )
         return (
             "💰 资金边界\n"
             "【额度规划】\n"
             f"当前交易净值: {compact_money(logical_equity)}U\n"
-            f"共享可用保证金额度: {compact_money(current_entry_limit)}U"
+            f"共享开仓保证金上限: {compact_money(current_entry_limit)}U"
             f" | 保留: {compact_money(reserve)}U\n"
             f"{_CARD_DIVIDER}\n"
             "【当前使用】\n"
-            f"账户可用保证金: {compact_money(account_available)}U\n"
             f"已成交仓位占用: {compact_money(committed)}U\n"
             f"待入场订单预留: {compact_money(pending_margin)}U\n"
-            f"剩余可开仓保证金: {compact_money(remaining)}U\n"
+            f"合计已用开仓额度: {compact_money(used_entry_margin)}U\n"
+            f"可用开仓保证金余额: {compact_money(remaining)}U\n"
+            f"账户未占用资金(含保留): {compact_money(account_available)}U\n"
+            "计算: min(账户未占用, 共享上限-成交占用-待入场预留)\n"
             "账户基线: "
             f"{compact_money(envelope['exchange_margin_balance_usdt']) if envelope else '待建立'}U"
         )
@@ -3196,6 +3209,38 @@ class PostgresTelegramState:
                 (),
             )
             line_rows = list(cursor.fetchall())
+            cursor.execute(
+                """
+                WITH latest_positions AS (
+                  SELECT DISTINCT ON (lead_portfolio_id,symbol,position_side)
+                         resulting_local_quantity,committed_margin_usdt
+                    FROM copytrading.virtual_position_events
+                   ORDER BY lead_portfolio_id,symbol,position_side,
+                            occurred_at DESC,position_event_id DESC
+                ), latest_decision AS (
+                  SELECT DISTINCT ON (signal_id) signal_id,state
+                    FROM copytrading.signal_decision_events
+                   ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
+                )
+                SELECT coalesce((
+                         SELECT sum(committed_margin_usdt)
+                           FROM latest_positions
+                          WHERE resulting_local_quantity>0
+                       ),0) AS committed,
+                       coalesce((
+                         SELECT sum(
+                                  claim.requested_quantity*claim.limit_price/claim.leverage
+                                )
+                           FROM copytrading.submission_claims AS claim
+                           JOIN latest_decision AS decision USING(signal_id)
+                          WHERE claim.order_type='LIMIT'
+                            AND decision.state IN ('SUBMITTED','UNCERTAIN')
+                       ),0) AS pending
+                """,
+                (),
+            )
+            margin_usage = cursor.fetchone()
+            configured_entry_limit = _current_entry_margin_limit(cursor)
         if row is None:
             return "💹 系统盈亏\n等待下一次 10 秒账户估值。"
         raw_total = Decimal(str(row["total_pnl_usdt"]))
@@ -3211,12 +3256,25 @@ class PostgresTelegramState:
         net_account_adjustment = _net_account_adjustment(total, line_rows)
         envelope = Decimal(str(row["operating_envelope_usdt"]))
         displayed_equity = _rebased_logical_equity(envelope, total)
-        displayed_available = logical_available_balance(
+        account_unoccupied = logical_available_balance(
             exchange_available_balance_usdt=Decimal(
                 str(row["exchange_available_balance_usdt"])
             ),
             logical_equity_usdt=displayed_equity,
             total_initial_margin_usdt=Decimal(str(row["total_initial_margin_usdt"])),
+        )
+        committed_margin = (
+            Decimal(str(margin_usage["committed"])) if margin_usage else Decimal("0")
+        )
+        pending_margin = (
+            Decimal(str(margin_usage["pending"])) if margin_usage else Decimal("0")
+        )
+        used_entry_margin = committed_margin + pending_margin
+        available_entry_margin = available_entry_margin_balance(
+            account_unoccupied_usdt=account_unoccupied,
+            entry_margin_limit_usdt=configured_entry_limit,
+            committed_margin_usdt=committed_margin,
+            pending_margin_usdt=pending_margin,
         )
         roi = (total / envelope) * Decimal("100")
         observed_at = row["observed_at"]
@@ -3234,8 +3292,12 @@ class PostgresTelegramState:
             f"已实现净额: {signed_money(realized)} U\n"
             f"未实现盈亏: {signed_money(unrealized)} U\n"
             f"手续费/资金费等净调整: {signed_money(net_account_adjustment)} U\n"
-            f"账户可用保证金: {compact_money(displayed_available)} U\n"
-            f"占用保证金: {compact_money(row['total_initial_margin_usdt'])} U"
+            f"可用开仓保证金余额: {compact_money(available_entry_margin)} U\n"
+            f"系统已用开仓额度: {compact_money(used_entry_margin)} / "
+            f"{compact_money(configured_entry_limit)} U\n"
+            f"交易所实际占用保证金: "
+            f"{compact_money(row['total_initial_margin_usdt'])} U\n"
+            f"账户未占用资金(含保留): {compact_money(account_unoccupied)} U"
         )
         line_cards: list[str] = []
         line_by_slot = {str(item["slot"]): item for item in line_rows}
@@ -3913,7 +3975,8 @@ def _notification_text_raw(
             logical_available = compact_money(payload["logical_available_usdt"])
             initial_margin = compact_money(payload["total_initial_margin_usdt"])
             margin_line = (
-                f"保证金: 账户可用 {logical_available} U | 当前实际占用 {initial_margin} U; "
+                f"保证金: 账户未占用资金(含保留) {logical_available} U | "
+                f"交易所实际占用 {initial_margin} U; "
                 "共享开仓额度仍按原配置执行\n"
             )
         return (

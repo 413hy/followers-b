@@ -446,7 +446,7 @@ def test_configured_limit_below_existing_usage_does_not_expand_or_force_usage() 
 
 @pytest.mark.parametrize("configured", ["NaN", "Infinity", "-1", "0", "121"])
 def test_invalid_configured_shared_margin_usage_is_rejected(configured: str) -> None:
-    with pytest.raises(ValueError, match="copy (portfolio usage|configured entry margin)"):
+    with pytest.raises(ValueError, match=r"copy (portfolio usage|configured entry margin)"):
         _usage(configured=configured)
 
 

@@ -128,6 +128,30 @@ def logical_available_balance(
     )
 
 
+def available_entry_margin_balance(
+    *,
+    account_unoccupied_usdt: Decimal,
+    entry_margin_limit_usdt: Decimal,
+    committed_margin_usdt: Decimal,
+    pending_margin_usdt: Decimal,
+) -> Decimal:
+    """Return margin still usable for new entries under both account and policy limits."""
+
+    values = (
+        account_unoccupied_usdt,
+        entry_margin_limit_usdt,
+        committed_margin_usdt,
+        pending_margin_usdt,
+    )
+    if any(not value.is_finite() or value < 0 for value in values):
+        raise ValueError("copy available entry margin values are invalid")
+    policy_remaining = max(
+        Decimal("0"),
+        entry_margin_limit_usdt - committed_margin_usdt - pending_margin_usdt,
+    )
+    return min(account_unoccupied_usdt, policy_remaining)
+
+
 def evaluate_account_risk(
     snapshot: CopyAccountSnapshot,
     *,

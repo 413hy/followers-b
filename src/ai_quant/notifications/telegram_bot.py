@@ -1175,8 +1175,10 @@ class TelegramMenuRouter:
                 self._client.edit_message(
                     chat_id,
                     message_id,
-                    result,
-                    reply_markup=contextual_inline_keyboard("funds"),
+                    f"{result}\n\n{self._dashboard.render('pnl')}",
+                    reply_markup=pnl_overview_keyboard(
+                        self._dashboard.pnl_leader_choices()
+                    ),
                 )
             return
         if value.startswith("confirm:"):
@@ -1407,7 +1409,7 @@ class TelegramMenuRouter:
                 "⚠️ 确认初始化账户汇总\n"
                 "当前净值将重新以 150 U 为起点; 今日、本月、累计、各条线、"
                 "各带单员和各仓位盈亏将从现在归零。\n"
-                "账户可用保证金会按 150 U 扣除已有仓位和待入场订单的真实占用后重算; "
+                "可用开仓保证金余额会按共享上限扣除已有仓位和待入场订单的占用后重算; "
                 "不会删除或平掉仓位、撤销订单、修改带单员和额度配置。\n"
                 "确认按钮 2 分钟内有效。"
                 if reset_summary

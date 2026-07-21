@@ -23,9 +23,29 @@ from ai_quant.copy_trading.risk import (
     AccountRiskLevel,
     CopyAccountRiskPolicy,
     CopyAccountSnapshot,
+    available_entry_margin_balance,
     evaluate_account_risk,
     logical_available_balance,
 )
+
+
+def test_available_entry_margin_uses_the_tighter_policy_balance() -> None:
+    assert available_entry_margin_balance(
+        account_unoccupied_usdt=Decimal("59.94"),
+        entry_margin_limit_usdt=Decimal("120"),
+        committed_margin_usdt=Decimal("89.81"),
+        pending_margin_usdt=Decimal("0.67"),
+    ) == Decimal("29.52")
+
+
+def test_available_entry_margin_never_exceeds_account_unoccupied_funds() -> None:
+    assert available_entry_margin_balance(
+        account_unoccupied_usdt=Decimal("4"),
+        entry_margin_limit_usdt=Decimal("120"),
+        committed_margin_usdt=Decimal("20"),
+        pending_margin_usdt=Decimal("1"),
+    ) == Decimal("4")
+
 
 NOW = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
 

@@ -105,8 +105,8 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
     assert "均已从现在重新计为 0" in text
     assert "当前仓位、待成交订单" in text
     assert "已有仓位仍会占用保证金额度" in text
-    assert "账户可用 61.44 U" in text
-    assert "当前实际占用 88.56 U" in text
+    assert "账户未占用资金(含保留) 61.44 U" in text
+    assert "交易所实际占用 88.56 U" in text
     assert "07-21 09:30:00" in text
     assert _notification_contextual_view(payload) is None
 

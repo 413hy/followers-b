@@ -756,7 +756,13 @@ def test_account_summary_reset_requires_authorization_and_two_step_confirmation(
         }
     )
     assert controls.executed == [(42, "nonce123456")]
-    assert calls[-1][1]["text"] == "账户汇总初始化完成"
+    assert calls[-1][1]["text"] == "账户汇总初始化完成\n\ndashboard:pnl"
+    callbacks = [
+        button["callback_data"]
+        for row in calls[-1][1]["reply_markup"]["inline_keyboard"]  # type: ignore[index]
+        for button in row
+    ]
+    assert "summary_reset:request" in callbacks
 
 
 def test_leader_lock_keyboard_binds_state_change_to_leader_id() -> None:
