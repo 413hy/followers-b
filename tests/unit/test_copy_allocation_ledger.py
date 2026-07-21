@@ -228,7 +228,31 @@ def test_allocator_rejects_entry_when_only_reserved_equity_remains() -> None:
         rules=_rules(),
     )
     assert not decision.approved
-    assert decision.reason_codes == ("COPY_SIZE_TOTAL_MARGIN_CAP_REACHED",)
+    assert decision.reason_codes == ("COPY_SIZE_AVAILABLE_BALANCE_RESERVE_REACHED",)
+
+
+def test_pnl_drawdown_does_not_shrink_the_fixed_shared_entry_pool_twice() -> None:
+    decision = ProportionalAllocator().size_increase(
+        _signal(source_quantity="100"),
+        market_price=Decimal("2000"),
+        leader=LeaderAllocation(
+            lead_portfolio_id="5108371059752839168",
+            source_aum_usdt=Decimal("100000"),
+            portfolio_weight=Decimal("1"),
+        ),
+        usage=_usage(
+            equity="124.82744643",
+            available="124.82744643",
+            total="94.82658772",
+            leader="3.7607344",
+            symbol="3.7607344",
+        ),
+        rules=_rules(),
+    )
+
+    assert decision.approved
+    assert decision.committed_margin_usdt == Decimal("5.000")
+    assert decision.reason_codes == ()
 
 
 def test_allocator_preserves_reserve_against_exchange_available_balance() -> None:

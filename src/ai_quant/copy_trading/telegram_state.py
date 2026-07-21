@@ -2748,10 +2748,7 @@ class PostgresTelegramState:
         pending_margin = Decimal(str(pending["pending"])) if pending else Decimal("0")
         reserve = Decimal("30")
         configured_entry_limit = Decimal("120")
-        current_entry_limit = min(
-            configured_entry_limit,
-            max(Decimal("0"), logical_equity - reserve),
-        )
+        current_entry_limit = configured_entry_limit
         remaining = max(
             Decimal("0"),
             current_entry_limit - committed - pending_margin,
@@ -2760,7 +2757,7 @@ class PostgresTelegramState:
             "💰 资金边界\n"
             "【额度规划】\n"
             f"当前交易净值: {compact_money(logical_equity)}U\n"
-            f"开仓保证金总上限: {compact_money(current_entry_limit)}U"
+            f"固定共享开仓池: {compact_money(current_entry_limit)}U"
             f" | 保留: {compact_money(reserve)}U\n"
             f"{_CARD_DIVIDER}\n"
             "【当前使用】\n"
@@ -3950,8 +3947,13 @@ def _signal_reason_text(reason_codes: tuple[str, ...]) -> str:
             "人工清仓窗口内的新开仓已跳过且不会事后重放; 清仓完成后仅跟随后续新信号"
         ),
         "COPY_SIZE_MARGIN_CAP_REACHED": "可用保证金容量不足, 本次没有下单",
-        "COPY_SIZE_TOTAL_MARGIN_CAP_REACHED": "共享开仓保证金容量已满, 本次没有下单",
-        "COPY_SIZE_AVAILABLE_BALANCE_RESERVE_REACHED": ("保留资金已到安全线, 本次没有下单"),
+        "COPY_SIZE_TOTAL_MARGIN_CAP_REACHED": (
+            "120 U 共享开仓池的剩余额度不足以满足最小下单量; "
+            "已成交仓位和待入场订单都会占用额度, 本次没有下单"
+        ),
+        "COPY_SIZE_AVAILABLE_BALANCE_RESERVE_REACHED": (
+            "交易账户实际可用余额已触及 30 U 保留线, 本次没有下单"
+        ),
         "COPY_SIZE_ORDER_MARGIN_CAP_REACHED": "单笔保证金上限不足以满足最小下单量",
         "COPY_SIZE_SYMBOL_MARGIN_CAP_REACHED": (
             "该交易对保证金已接近 20 U 上限, 剩余额度不足以满足最小下单量"

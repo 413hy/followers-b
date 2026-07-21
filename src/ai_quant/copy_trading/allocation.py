@@ -149,10 +149,11 @@ class ProportionalAllocator:
         # smaller leader fill must never lower leverage and inflate margin for an
         # already-open position.
         default_leverage = maximum_leverage
-        account_entry_capacity = min(
-            self._policy.entry_allocation_usdt,
-            max(Decimal("0"), usage.account_equity_usdt - self._policy.reserve_usdt),
-        )
+        # The owner-defined 120 USDT entry pool is a fixed shared allocation. Realized
+        # and unrealized PnL are already reflected in the logical account snapshot and
+        # must not shrink this pool a second time. Exchange available balance still
+        # protects the 30 USDT reserve independently below.
+        account_entry_capacity = self._policy.entry_allocation_usdt
         account_available_balance = (
             usage.account_equity_usdt
             if usage.account_available_balance_usdt is None
