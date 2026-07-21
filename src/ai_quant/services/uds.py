@@ -99,9 +99,7 @@ class BoundedUnixServer:
     def __init__(
         self,
         path: Path,
-        handler: Callable[
-            [Mapping[str, Any], PeerCredentials], Mapping[str, Any] | None
-        ],
+        handler: Callable[[Mapping[str, Any], PeerCredentials], Mapping[str, Any] | None],
         *,
         identity_expectation: UnixSocketServerExpectation,
         max_frame_bytes: int = RATE_FRAME_MAX_BYTES,
@@ -135,8 +133,7 @@ class BoundedUnixServer:
         if (
             not stat.S_ISDIR(metadata.st_mode)
             or metadata.st_uid != 0
-            or metadata.st_gid
-            != self._identity_expectation.runtime_directory_gid
+            or metadata.st_gid != self._identity_expectation.runtime_directory_gid
             or parent_mode & 0o007
             or parent_mode & 0o070 != 0o070
             or not metadata.st_mode & stat.S_ISGID
@@ -151,10 +148,8 @@ class BoundedUnixServer:
             os.chmod(self._path, 0o660)  # nosec B103
             socket_metadata = self._path.stat()
             if (
-                socket_metadata.st_uid
-                != self._identity_expectation.socket_owner_uid
-                or socket_metadata.st_gid
-                != self._identity_expectation.socket_owner_gid
+                socket_metadata.st_uid != self._identity_expectation.socket_owner_uid
+                or socket_metadata.st_gid != self._identity_expectation.socket_owner_gid
                 or stat.S_IMODE(socket_metadata.st_mode) != 0o660
             ):
                 raise UdsProtocolError("SERVER_SOCKET_IDENTITY_MISMATCH")

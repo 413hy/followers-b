@@ -70,9 +70,7 @@ def _validated_rows(
             or not _SHA256.fullmatch(payload_hash)
             or canonical_digest(payload).hex() != payload_hash
             or payload.get("occurred_at") != _timestamp(occurred_at)
-            or not timedelta(0) <= utc_now - occurred_at <= timedelta(
-                seconds=maximum_age_seconds
-            )
+            or not timedelta(0) <= utc_now - occurred_at <= timedelta(seconds=maximum_age_seconds)
         ):
             raise AuthorizationDenied("AUTHORITY_MEASUREMENT_INVALID")
         result.append((occurred_at, payload, payload_hash))
@@ -116,8 +114,7 @@ def measure_authority_observations(
         authority for authority in enabled_authorities if authority.endswith("_FSTREAM")
     }
     if set(stream_profiles) != expected_streams or any(
-        not _ID.fullmatch(profile.profile_id)
-        or not _SHA256.fullmatch(profile.contract_hash)
+        not _ID.fullmatch(profile.profile_id) or not _SHA256.fullmatch(profile.contract_hash)
         for profile in stream_profiles.values()
     ):
         raise AuthorizationDenied("AUTHORITY_MEASUREMENT_CONFIGURATION_INVALID")
@@ -144,14 +141,10 @@ def measure_authority_observations(
             if (
                 limit_payload.get("exchange_info_server_time_observation_id")
                 != time_payload.get("message_id")
-                or limit_payload.get("correlation_id")
-                != time_payload.get("correlation_id")
-                or limit_payload.get("caller_instance_id")
-                != time_payload.get("caller_instance_id")
-                or limit_payload.get("gateway_boot_id")
-                != time_payload.get("gateway_boot_id")
-                or limit_payload.get("fencing_epoch")
-                != time_payload.get("fencing_epoch")
+                or limit_payload.get("correlation_id") != time_payload.get("correlation_id")
+                or limit_payload.get("caller_instance_id") != time_payload.get("caller_instance_id")
+                or limit_payload.get("gateway_boot_id") != time_payload.get("gateway_boot_id")
+                or limit_payload.get("fencing_epoch") != time_payload.get("fencing_epoch")
             ):
                 raise AuthorizationDenied("AUTHORITY_MEASUREMENT_BINDING_MISMATCH")
             measured.append(
@@ -160,9 +153,7 @@ def measure_authority_observations(
                     "observed_at": _timestamp(max(time_row[0], limit_row[0])),
                     "server_time_observation_id": time_payload.get("message_id"),
                     "server_time_observation_hash": time_row[2],
-                    "exchange_rate_limit_observation_id": limit_payload.get(
-                        "message_id"
-                    ),
+                    "exchange_rate_limit_observation_id": limit_payload.get("message_id"),
                     "exchange_rate_limit_observation_hash": limit_row[2],
                     "connection_profile_id": None,
                     "connection_contract_hash": None,

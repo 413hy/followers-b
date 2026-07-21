@@ -39,9 +39,7 @@ def _snapshot() -> dict[str, object]:
 
 def test_database_measurement_snapshot_is_closed_and_query_bound() -> None:
     measured = validate_database_measurement_snapshot(_snapshot())
-    assert measured["database_authority"]["migration_head"] == (
-        "0010_local_measurements"
-    )
+    assert measured["database_authority"]["migration_head"] == ("0010_local_measurements")
 
 
 def test_database_measurements_use_one_read_only_serializable_transaction() -> None:
@@ -68,16 +66,12 @@ def test_database_measurements_use_one_read_only_serializable_transaction() -> N
             return Cursor()
 
     measured = collect_database_measurements(cast(Any, Connection()))
-    assert measured["database_authority"]["migration_head"] == (
-        "0010_local_measurements"
-    )
+    assert measured["database_authority"]["migration_head"] == ("0010_local_measurements")
     assert statements == [
         "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE",
         "SELECT rate_control.read_startup_measurements() AS measurement",
     ]
-    assert measured["nonce_permit_integrity"]["integrity_query_hash"] == (
-        INTEGRITY_QUERY_HASH
-    )
+    assert measured["nonce_permit_integrity"]["integrity_query_hash"] == (INTEGRITY_QUERY_HASH)
     assert measured["active_authority_blocks"] == {"authorities": []}
 
 
@@ -124,9 +118,7 @@ def test_database_measurement_closes_sorted_authority_blocks() -> None:
     snapshot = _snapshot()
     snapshot["active_authority_blocks"] = ["BINANCE_PRODUCTION_FAPI"]
     measured = validate_database_measurement_snapshot(snapshot)
-    assert measured["active_authority_blocks"] == {
-        "authorities": ["BINANCE_PRODUCTION_FAPI"]
-    }
+    assert measured["active_authority_blocks"] == {"authorities": ["BINANCE_PRODUCTION_FAPI"]}
 
     snapshot["active_authority_blocks"] = [
         "BINANCE_PRODUCTION_FSTREAM",

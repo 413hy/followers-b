@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "environment": "PRODUCTION",
+  "activation_id": "replace-with-unique-id",
+  "api_key_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "issued_at": "2020-01-01T00:00:00Z",
+  "expires_at": "2020-01-02T00:00:00Z",
+  "rest_base": "https://fapi.binance.com",
+  "maximum_operating_envelope_usdt": "150",
+  "dedicated_futures_account_confirmed": true,
+  "hedge_mode_confirmed": true,
+  "reuse_testnet_database": false,
+  "real_orders_acknowledgement": "I_ACKNOWLEDGE_THIS_PROFILE_SUBMITS_REAL_BINANCE_FUTURES_ORDERS"
+}

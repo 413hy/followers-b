@@ -133,6 +133,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        f"DROP FUNCTION rate_control.consume_permit_v2({CONSUME_V2_ARGUMENTS})"
-    )
+    op.execute(f"DROP FUNCTION rate_control.consume_permit_v2({CONSUME_V2_ARGUMENTS})")

@@ -50,9 +50,7 @@ def _documents(source_root: Path) -> tuple[dict[str, Any], dict[str, Any], str]:
         "content": keyring_content,
         "rotation_proof": None,
     }
-    document = json.loads(
-        (ROOT / "config/binance-connection-contract.example.json").read_text()
-    )
+    document = json.loads((ROOT / "config/binance-connection-contract.example.json").read_text())
     source = document["content"]["source_documents"][0]
     relative = source["artifact_path"]
     source_path = source_root / relative
@@ -88,9 +86,7 @@ def test_signed_stream_profiles_close_source_and_environment(tmp_path: Path) -> 
         source_artifact_root=tmp_path,
         now=NOW,
     )
-    assert profiles["BINANCE_PRODUCTION_FSTREAM"].contract_hash == document[
-        "contract_hash"
-    ]
+    assert profiles["BINANCE_PRODUCTION_FSTREAM"].contract_hash == document["contract_hash"]
 
 
 def test_stream_profiles_reject_source_or_coverage_drift(tmp_path: Path) -> None:
@@ -109,4 +105,3 @@ def test_stream_profiles_reject_source_or_coverage_drift(tmp_path: Path) -> None
             source_artifact_root=tmp_path,
             now=NOW,
         )
-

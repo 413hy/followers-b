@@ -7,14 +7,22 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = {".git", ".venv", "contracts", "config", "runbooks"}
+SKIP = {
+    ".git",
+    ".hypothesis",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "evidence",
+}
 PATTERNS = {
     "openai_key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "telegram_token": re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"),
     "literal_secret_assignment": re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|private[_-]?key)"
-        r"\s*[:=]\s*[A-Za-z0-9+/=_-]{16,}"
+        r'''\s*[:=]\s*["'][A-Za-z0-9+/=_-]{16,}["']'''
     ),
 }
 

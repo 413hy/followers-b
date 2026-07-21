@@ -1,3 +1,0 @@
-33d2a3f1bd5239c0d3d608b65ab1c0ffc785c0c295dd07846f60dabe153bbf99  /root/quantify/vps.7z
-8a7dfd6a41191f4d7c290b4dd626175344b041ae33c89da60c9f63f1bc571628  /root/quantify/louie_price_action_system_v1.zip
-e3d2622cd2ca30558399a7ab53a2d11803f64b95e9a4080f4a0f8425eb2d8b3e  /root/quantify/PYTA_OrderFlow_Quant_System_Spec_v0.1.0.zip

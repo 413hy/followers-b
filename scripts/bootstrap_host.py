@@ -273,9 +273,10 @@ def render_templates(hardening: Path, ssh_port: int, source_cidr: str) -> dict[s
         if "@SSH_" in text:
             fail(f"unrendered token remains in {relative}")
         rendered[relative] = text
-    run(["nft", "--check", "-f", "-"], input_bytes=rendered[
-        "nftables/ai-quant-host-input.nft.template"
-    ].encode())
+    run(
+        ["nft", "--check", "-f", "-"],
+        input_bytes=rendered["nftables/ai-quant-host-input.nft.template"].encode(),
+    )
     with tempfile.NamedTemporaryFile("w", encoding="utf-8") as ssh_config:
         ssh_config.write("HostKey /etc/ssh/ssh_host_ed25519_key\n")
         ssh_config.write(rendered["sshd/99-ai-quant.conf.template"])
@@ -789,9 +790,9 @@ def command_verify(args: argparse.Namespace) -> int:
     chrony = run(["chronyc", "tracking"], check=False).stdout.decode()
     if "Leap status     : Normal" not in chrony:
         failures.append("chrony")
-    timezone = run(
-        ["timedatectl", "show", "--property=Timezone", "--value"]
-    ).stdout.decode().strip()
+    timezone = (
+        run(["timedatectl", "show", "--property=Timezone", "--value"]).stdout.decode().strip()
+    )
     if timezone not in {"UTC", "Etc/UTC"}:
         failures.append("timezone")
     listeners = run(["ss", "-H", "-lntup"]).stdout.decode()
@@ -834,8 +835,7 @@ def command_verify(args: argparse.Namespace) -> int:
                 "nft delete table inet ai_quant_host_input"
             ),
             "docker": (
-                "restore daemon.json and use preserved "
-                f"{plan['docker']['current_data_root']}"
+                f"restore daemon.json and use preserved {plan['docker']['current_data_root']}"
             ),
         },
     }

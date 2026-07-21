@@ -76,7 +76,7 @@ def test_bootstrap_plan_is_read_only_and_binds_exact_inputs(
 ) -> None:
     operator_public, approval_private, approval_public, backup = _generate_inputs(tmp_path)
     output = tmp_path / "plan.json"
-    monkeypatch.setenv("SSH_CONNECTION", "171.221.123.164 11160 10.0.0.70 22")
+    monkeypatch.setenv("SSH_CONNECTION", "198.51.100.164 11160 10.0.0.70 22")
     args = bootstrap_host.parser().parse_args(
         [
             "plan",
@@ -87,7 +87,7 @@ def test_bootstrap_plan_is_read_only_and_binds_exact_inputs(
             "--ssh-port",
             "22",
             "--ssh-source-cidr",
-            "171.221.123.164/32",
+            "198.51.100.164/32",
             "--operator-public-key",
             str(operator_public),
             "--approval-public-key",
@@ -102,10 +102,10 @@ def test_bootstrap_plan_is_read_only_and_binds_exact_inputs(
     assert args.handler(args) == 0
     plan = json.loads(output.read_text(encoding="utf-8"))
     assert plan["ssh"] == {
-        "observed_source_ip": "171.221.123.164",
+        "observed_source_ip": "198.51.100.164",
         "port": 22,
         "recovery_console_confirmed": True,
-        "source_cidr": "171.221.123.164/32",
+        "source_cidr": "198.51.100.164/32",
     }
     assert plan["docker"]["target_data_root"] == "/srv/ai-quant/docker"
     assert plan["operator"]["public_key_sha256"] == bootstrap_host.sha256(operator_public)
@@ -133,7 +133,7 @@ def test_bootstrap_rejects_broad_ssh_source_range(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     operator_public, _approval_private, approval_public, backup = _generate_inputs(tmp_path)
-    monkeypatch.setenv("SSH_CONNECTION", "171.221.123.164 11160 10.0.0.70 22")
+    monkeypatch.setenv("SSH_CONNECTION", "198.51.100.164 11160 10.0.0.70 22")
     args = bootstrap_host.parser().parse_args(
         [
             "plan",

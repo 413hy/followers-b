@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "copy-trading.schema.json",
+  "title": "Public Leader Copy Trading Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "environment", "source", "selection", "portfolio", "attribution", "risk", "schedules", "codex"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "environment": { "enum": ["TESTNET", "PRODUCTION"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "adapter_contract", "poll_interval_seconds", "page_size", "request_timeout_seconds", "maximum_response_bytes", "access_denied_action", "browser_fallback"],
+      "properties": {
+        "origin": { "const": "https://www.binance.com" },
+        "adapter_contract": { "const": "UNDOCUMENTED_PUBLIC_WEB_BAPI" },
+        "poll_interval_seconds": { "const": 30 },
+        "page_size": { "type": "integer", "minimum": 10, "maximum": 100 },
+        "request_timeout_seconds": { "type": "integer", "minimum": 3, "maximum": 30 },
+        "maximum_response_bytes": { "type": "integer", "minimum": 65536, "maximum": 8388608 },
+        "access_denied_action": { "const": "FAIL_CLOSED_AND_NOTIFY" },
+        "browser_fallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "mode", "persistent_profile", "anti_bot_evasion", "captcha_bypass", "proxy_rotation"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "const": "NORMAL_CHROMIUM_SESSION" },
+            "persistent_profile": { "const": true },
+            "anti_bot_evasion": { "const": false },
+            "captcha_bypass": { "const": false },
+            "proxy_rotation": { "const": false }
+          }
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["leader_count", "long_term_slots", "short_term_slots", "manual_custom_slots", "custom_slot_selection", "candidate_pool_size", "time_range", "minimum_win_rate_pct", "maximum_drawdown_pct", "minimum_aum_usdt", "initial_state", "long_term_objective", "short_term_1_objective", "short_term_2_objective", "replacement_with_open_position", "long_term_replacement_wait", "short_term_replacement_wait", "replacement_timeout_action", "short_minimum_orders_1d", "short_minimum_orders_3d", "short_minimum_orders_7d", "short_minimum_active_days_7d"],
+      "properties": {
+        "leader_count": { "const": 3 },
+        "long_term_slots": { "const": 1 },
+        "short_term_slots": { "const": 2 },
+        "manual_custom_slots": { "const": 2 },
+        "custom_slot_selection": { "const": "TELEGRAM_OWNER_ONLY" },
+        "candidate_pool_size": { "type": "integer", "minimum": 20, "maximum": 500 },
+        "time_range": { "enum": ["30D", "90D"] },
+        "minimum_win_rate_pct": { "$ref": "#/$defs/decimalString" },
+        "maximum_drawdown_pct": { "$ref": "#/$defs/decimalString" },
+        "minimum_aum_usdt": { "$ref": "#/$defs/positiveDecimalString" },
+        "initial_state": { "const": "OBSERVE_ONLY_BASELINE" },
+        "long_term_objective": { "const": "COMPREHENSIVE_STABILITY" },
+        "short_term_1_objective": { "const": "HIGHEST_WIN_RATE" },
+        "short_term_2_objective": { "const": "DAILY_COMPOSITE" },
+        "replacement_with_open_position": { "const": "WAIT_FOR_CLOSE" },
+        "long_term_replacement_wait": { "const": "1D" },
+        "short_term_replacement_wait": { "const": "2H" },
+        "replacement_timeout_action": { "const": "KEEP_INCUMBENT_AND_CANCEL" },
+        "short_minimum_orders_1d": { "const": 1 },
+        "short_minimum_orders_3d": { "const": 5 },
+        "short_minimum_orders_7d": { "const": 14 },
+        "short_minimum_active_days_7d": { "const": 3 }
+      }
+    },
+    "portfolio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operating_envelope_usdt", "entry_allocation_usdt", "reserve_usdt", "default_leverage", "leverage_selection", "maximum_leverage", "maximum_order_margin_usdt", "maximum_symbol_margin_usdt", "follow_multiplier_scope", "follow_multiplier_default", "follow_multiplier_minimum", "follow_multiplier_maximum", "insufficient_margin_action", "single_order_priority", "quantity_rounding", "minimum_notional_action"],
+      "properties": {
+        "operating_envelope_usdt": { "const": "150" },
+        "entry_allocation_usdt": { "const": "120" },
+        "reserve_usdt": { "const": "30" },
+        "default_leverage": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "leverage_selection": { "const": "EXCHANGE_MAXIMUM" },
+        "maximum_leverage": { "const": 125 },
+        "maximum_order_margin_usdt": { "const": "10" },
+        "maximum_symbol_margin_usdt": { "const": "20" },
+        "follow_multiplier_scope": { "const": "PER_LEADER_ID" },
+        "follow_multiplier_default": { "const": 1 },
+        "follow_multiplier_minimum": { "const": 1 },
+        "follow_multiplier_maximum": { "const": 10 },
+        "insufficient_margin_action": { "const": "RAISE_LEVERAGE_THEN_PROPORTIONAL_DOWNSIZE" },
+        "single_order_priority": { "const": "SOURCE_FILL_NOTIONAL_TARGET_WITHIN_CAPS" },
+        "quantity_rounding": { "const": "DOWN_TO_EXCHANGE_STEP" },
+        "minimum_notional_action": { "const": "IGNORE_AND_RECORD" }
+      }
+    },
+    "attribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exchange_position_mode", "leader_isolation", "same_symbol_same_side_exchange_behavior", "orphan_reduction_action", "history_replay"],
+      "properties": {
+        "exchange_position_mode": { "const": "HEDGE" },
+        "leader_isolation": { "const": "VIRTUAL_LEDGER" },
+        "same_symbol_same_side_exchange_behavior": { "const": "AGGREGATED_WITH_INTERNAL_ATTRIBUTION" },
+        "orphan_reduction_action": { "const": "IGNORE_RECORD_NOTIFY" },
+        "history_replay": { "const": "FORBIDDEN" }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["per_position_stop", "warning_equity_usdt", "emergency_equity_usdt", "warning_margin_ratio_pct", "emergency_margin_ratio_pct", "automatic_intervention", "threshold_action", "operator_decision_required"],
+      "properties": {
+        "per_position_stop": { "const": false },
+        "warning_equity_usdt": { "$ref": "#/$defs/positiveDecimalString" },
+        "emergency_equity_usdt": { "$ref": "#/$defs/positiveDecimalString" },
+        "warning_margin_ratio_pct": { "$ref": "#/$defs/positiveDecimalString" },
+        "emergency_margin_ratio_pct": { "$ref": "#/$defs/positiveDecimalString" },
+        "automatic_intervention": { "const": false },
+        "threshold_action": { "const": "OBSERVE_ONLY" },
+        "operator_decision_required": { "const": true }
+      }
+    },
+    "schedules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timezone", "short_term_selection_daily", "long_term_selection_weekly", "codex_audit_minute", "watchdog_minutes"],
+      "properties": {
+        "timezone": { "const": "Asia/Shanghai" },
+        "short_term_selection_daily": { "const": "00:00" },
+        "long_term_selection_weekly": { "const": "Sun 00:00" },
+        "codex_audit_minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+        "watchdog_minutes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0, "maximum": 59 }
+        }
+      }
+    },
+    "codex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli_path", "model", "reasoning_effort", "mode", "sandbox", "structured_output", "secret_access", "direct_order_authority", "production_activation"],
+      "properties": {
+        "cli_path": { "const": "/root/.local/bin/codex" },
+        "model": { "const": "gpt-5.6-sol" },
+        "reasoning_effort": { "const": "high" },
+        "mode": { "const": "SYSTEMD_CODEX_EXEC" },
+        "sandbox": { "const": "READ_ONLY_AUDIT" },
+        "structured_output": { "const": true },
+        "secret_access": { "const": "DENIED" },
+        "direct_order_authority": { "const": "DENIED" },
+        "production_activation": { "const": "LOCKED" }
+      }
+    }
+  },
+  "$defs": {
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]{0,17})(?:\\.[0-9]{1,18})?$"
+    },
+    "positiveDecimalString": {
+      "type": "string",
+      "pattern": "^(?:0\\.[0-9]{0,17}[1-9]|[1-9][0-9]{0,17}(?:\\.[0-9]{1,18})?)$"
+    }
+  }
+}

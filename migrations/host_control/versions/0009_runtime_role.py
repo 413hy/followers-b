@@ -7,6 +7,7 @@ down_revision = "0008_decision_audit"
 branch_labels = None
 depends_on = None
 
+
 def upgrade() -> None:
     op.execute(
         """

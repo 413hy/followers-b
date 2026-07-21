@@ -3,6 +3,7 @@ Description=AI Quant Binance Testnet user-data evidence observer
 After=network-online.target aiq-testnet-secrets.service
 Wants=network-online.target
 Requires=aiq-testnet-secrets.service
+OnFailure=aiq-copy-incident-reporter@%n.service
 StartLimitIntervalSec=300
 StartLimitBurst=20
 
@@ -13,6 +14,7 @@ Group=root
 WorkingDirectory=/root/quantify/ai-quant-system
 UMask=0077
 ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.testnet_user_stream --api-key-file /run/ai-quant-secrets/binance-testnet-api-key --api-secret-file /run/ai-quant-secrets/binance-testnet-api-secret --repository-root /root/quantify/ai-quant-system --evidence-file /var/lib/ai-quant/evidence/testnet/user-stream/current/events.jsonl --state-file /var/lib/ai-quant/evidence/testnet/user-stream/current/state.json --lock-file /run/ai-quant/testnet-user-stream.lock --keepalive-interval-seconds 1800 --rotate-no-later-than-seconds 84600
+ExecStopPost=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_failure_hook --source-unit aiq-testnet-user-stream.service
 Restart=always
 RestartSec=5
 TimeoutStopSec=15

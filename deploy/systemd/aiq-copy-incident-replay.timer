@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry pending copy-system incident notifications every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+AccuracySec=30s
+Unit=aiq-copy-incident-replay.service
+
+[Install]
+WantedBy=timers.target

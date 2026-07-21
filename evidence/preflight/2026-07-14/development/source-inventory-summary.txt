@@ -1,5 +1,0 @@
-vps_files=144
-louie_files=25
-pyta_files=16
-writable_reference_files=0
-reference_symlinks=0

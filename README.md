@@ -1,62 +1,76 @@
-# AI Quant execution framework
+# Binance 合约带单员跟单系统
 
-This repository is now a strategy-free foundation for building a new trading system. It contains
-no built-in signal generator and no active strategy campaign. It does retain a strategy-agnostic
-automatic trading engine that can consume complete intents from a future project-owned decision
-provider, enforce fail-closed gates and submit them through a protected execution adapter.
+这是一套运行在 Debian VPS 上的、事件源驱动的 Binance USD-M Futures
+跟单系统。系统每 30 秒读取公开带单员操作，为每个带单员维护独立虚拟仓位账本，
+并在 Binance Testnet 上执行对应的开仓、加仓、减仓和平仓。
 
-Current state: `FRAMEWORK_READY / AUTOMATION_ENGINE_READY / NO_BUILTIN_STRATEGY /
-UNATTENDED_DISABLED / PRODUCTION_RISK_LOCKED`.
+> 默认部署只允许 Testnet。正式盘入口有独立数据库和激活门禁，不能通过单纯替换 API URL
+> 启用。这是高风险交易软件，使用者必须自行承担交易、杠杆、清算、API 变更和公开数据源不稳定风险。
 
-## Retained framework
+## 主要功能
 
-- Strict market-data models, local order-book reconstruction, warm-up and archive/replay support.
-- Reusable price-action and order-flow feature primitives. They calculate observations but do not
-  decide or submit trades.
-- Universe/ranking, Decimal cost/edge utilities, risk sizing and hard-limit validation.
-- Generic order models, response classification, reconciliation, simulation and native protection
-  planning.
-- Strategy-agnostic automatic intent validation, idempotency, risk/cost gate and protected
-  submission orchestration.
-- Exact-destination Binance Testnet capability, order-lifecycle and native-protection probes.
-- Read-only Testnet user-data stream observer with hash-chained evidence.
-- Rate budgeting, control API, outbound notifications, monitoring, backup, validation and database
-  migrations.
-- Debian 12 Bookworm/aarch64 deployment and fail-closed production boundaries.
+- 1 个长线、2 个短线和 2 个手动自定义槽位。
+- 长线每周、短线每日自动选人，支持锁定带单员和备选人。
+- 每个带单员独立仓位、订单、盈亏和跟单倍数，不因同币种同方向而混账。
+- 开仓/加仓使用带单员成交价作为保护限价，减仓/平仓使用市价。
+- 150 U 逻辑资金边界、30 U 保留资金、单笔最多 10 U 保证金、同币种最多 20 U。
+- 自动读取交易所允许的最大初始杠杆，不足时按剩余容量缩量。
+- Telegram 面板、交易通知、带单员管理、指定平仓、盈亏和健康状态查询。
+- PostgreSQL 事件源账本、幂等下单、事务 Outbox、订单状态恢复和每日验证备份。
+- 30 分钟确定性巡检、每小时 Codex 审查、故障即时唤醒与自动修复闭环。
 
-## Intentionally absent
+## 数据流
 
-- V4/V5 market-breadth, pullback, continuation or predictive entry rules.
-- Strategy-owned position management and elapsed strategy state.
-- Automatic Testnet campaign and its systemd service.
-- A configured decision provider or enabled unattended automatic-trading service.
-- Strategy-specific Telegram dashboard, replay sweeps, result reports and audit evidence.
-- Any production activation or production credential.
-
-The `ai_quant.strategy` package remains as an intentionally empty extension point. A new project
-must define its decision provider, position policy, gate/executor adapters, tests and deployment
-service before enabling unattended execution. The generic automation engine is not a strategy and
-never invents an order when its input queue is empty.
-
-## Retained services
-
-- `aiq-testnet-secrets.service`: root-only volatile Testnet credential materialization.
-- `aiq-testnet-user-stream.service`: read-only Testnet account-event evidence.
-
-Neither currently enabled service generates orders. The previous strategy-specific campaign and
-dashboard are stopped, disabled and removed. Automatic trading is a reusable library capability;
-its runtime service stays absent until a new project supplies and validates the decision adapter.
-
-## Validate
-
-```bash
-make bootstrap
-make validate-debian-platform
-make ci
-uv run pytest -q
+```text
+Binance 公开带单数据
+          ↓ 30 秒轮询
+归一化信号 → 带单员虚拟账本 → 资金/杠杆/幂等门禁
+          ↓
+Binance USD-M Testnet → 成交与盈亏事件 → PostgreSQL Outbox → Telegram
+          ↑
+Watchdog / Codex 审查 / 故障报告 / 备份
 ```
 
-See [framework scope](docs/FRAMEWORK_SCOPE.md), [implementation status](IMPLEMENTATION_STATUS.md)
-and [handoff state](HANDOFF_STATE.md). The editable three-page system view is in
-[docs/architecture/trading-framework.drawio](docs/architecture/trading-framework.drawio), with
-[Next AI Draw.io usage notes](docs/architecture/README.md).
+更完整的业务规则见
+[跟单子系统架构](docs/architecture/copy-trading-testnet.md)。
+
+## 部署
+
+新 VPS 请按 [Debian 12 Testnet 完整部署手册](docs/deployment/copy-trading-vps.md)
+从零部署。手册包含：
+
+- Docker、Python 3.12/uv 和 Codex CLI 准备；
+- Binance Testnet、Telegram 和 PostgreSQL 密钥文件；
+- Alembic 迁移、systemd 开机自启与定时任务；
+- 首次选人、Telegram 恢复新开仓和健康验证；
+- 升级、备份、日志和常见故障排查。
+
+正式盘只能按
+[Testnet → 正式盘切换手册](docs/deployment/copy-production-cutover.md)
+执行，不得复用 Testnet 数据库、密钥或客户端订单 ID 命名空间。
+
+## 验证
+
+```bash
+uv sync --frozen --all-groups
+uv run ruff check src tests tools scripts migrations
+uv run mypy src
+uv run pytest -q
+AIQ_BUSINESS_DATABASE_URL_FILE=/run/ai-quant-secrets/copy-business-database-url \
+  uv run alembic -c migrations/business/alembic.ini current
+```
+
+实际 Binance 订单测试只能在专用 Testnet 账户上运行。单元测试通过不代表正式盘已获批。
+
+## 密钥与运行数据
+
+仓库不包含 API Key、Telegram Token、Codex 登录状态、数据库密码、备份、日志、
+浏览器配置或 VPS 取证数据。密钥必须放在仓库外的 `/root/aiq-user-inputs`，
+由 systemd 一次性服务物化到 `/run/ai-quant-secrets`。
+
+如果任何密钥曾经进入 Git，仅删除文件不够：应当立即在 Binance/Telegram/OpenAI 侧撤销并轮换。
+
+## 许可说明
+
+`pyproject.toml` 当前将项目标记为 Proprietary。未附带开源许可的情况下，公开可见不等于
+授予复制、修改或商业使用权。如需开源，仓库所有者应当另行选择并添加 LICENSE。

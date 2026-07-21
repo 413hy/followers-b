@@ -25,9 +25,7 @@ from ai_quant.services.uds import (
 
 def _server(
     directory: Path,
-    handler: Callable[
-        [Mapping[str, Any], PeerCredentials], Mapping[str, Any] | None
-    ],
+    handler: Callable[[Mapping[str, Any], PeerCredentials], Mapping[str, Any] | None],
 ) -> BoundedUnixServer:
     directory.chmod(0o2770)
     return BoundedUnixServer(

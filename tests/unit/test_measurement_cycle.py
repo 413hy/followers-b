@@ -118,4 +118,3 @@ def test_host_measurement_database_target_is_fixed_unix_socket() -> None:
     assert "host=/run/ai-quant-host-postgres" in dsn
     assert "dbname=aiq_host_rate_control" in dsn
     assert "user=aiq_rate_authority" in dsn
-

@@ -346,9 +346,7 @@ def verify_runtime_trust_bundle(
     )
     try:
         verification_key.verify(
-            _decode_base64(
-                signature.get("signature_base64"), 64, "TRUST_BUNDLE_SIGNATURE_INVALID"
-            ),
+            _decode_base64(signature.get("signature_base64"), 64, "TRUST_BUNDLE_SIGNATURE_INVALID"),
             digest,
         )
     except InvalidSignature as exc:
@@ -375,9 +373,7 @@ def verify_runtime_trust_bundle(
             issuer=issuer_name,
             key_id=issuer_key_id,
             public_key=Ed25519PublicKey.from_public_bytes(
-                _decode_base64(
-                    raw.get("public_key_base64"), 32, "TRUST_BUNDLE_ISSUER_INVALID"
-                )
+                _decode_base64(raw.get("public_key_base64"), 32, "TRUST_BUNDLE_ISSUER_INVALID")
             ),
             allowed_operation_classes=_string_set(
                 raw.get("allowed_operation_classes"), "TRUST_BUNDLE_ISSUER_INVALID"
@@ -402,9 +398,7 @@ def verify_runtime_trust_bundle(
         raise AuthorizationDenied("TRUST_BUNDLE_ATTESTATION_INVALID")
     attestation_signers: dict[str, AttestationSignerPolicy] = {}
     for signer_key_id, raw in raw_attestation_signers.items():
-        not_before = _parse_time(
-            raw.get("not_before"), "TRUST_BUNDLE_ATTESTATION_INVALID"
-        )
+        not_before = _parse_time(raw.get("not_before"), "TRUST_BUNDLE_ATTESTATION_INVALID")
         not_after = _parse_time(raw.get("not_after"), "TRUST_BUNDLE_ATTESTATION_INVALID")
         holder_uid = raw.get("holder_uid")
         holder_gid = raw.get("holder_gid")

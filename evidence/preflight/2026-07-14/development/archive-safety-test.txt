@@ -1,5 +1,0 @@
-vps.7z archive_test=PASS
-louie zip archive_test=PASS
-pyta zip archive_test=PASS
-path_traversal_members=0
-symlink_members=0

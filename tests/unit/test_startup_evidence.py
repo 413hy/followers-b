@@ -53,9 +53,7 @@ def _signed_ready(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], RuntimeTrustBundle, Ed25519PrivateKey]:
     signer = Ed25519PrivateKey.generate()
-    bundle_document, keyring, keyring_hash, _ = _signed_policy(
-        attestation_signer=signer
-    )
+    bundle_document, keyring, keyring_hash, _ = _signed_policy(attestation_signer=signer)
     (tmp_path / "runtime-trust-bundle.json").write_text(
         json.dumps(bundle_document),
         encoding="utf-8",
@@ -67,9 +65,7 @@ def _signed_ready(
         now=NOW,
     )
     evidence = json.loads(
-        (ROOT / "contracts/examples/host-rate-startup-evidence.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "contracts/examples/host-rate-startup-evidence.json").read_text(encoding="utf-8")
     )
     content = evidence["content"]
     content["evidence_status"] = "SIGNED_READY"
@@ -220,8 +216,7 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
             ),
             socket_sources=socket_sources,
             peer_acl_hashes={
-                role: content["sockets"][role]["peer_acl_hash"]
-                for role in socket_sources
+                role: content["sockets"][role]["peer_acl_hash"] for role in socket_sources
             },
             release_image_digest_sources=release_image_digest_sources,
             dynamic_fact_sources=dynamic_fact_sources,
@@ -244,8 +239,7 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
                 for name, source in release_sources.items()
             },
             "release_image_digest_sources": {
-                name: str(path)
-                for name, path in release_image_digest_sources.items()
+                name: str(path) for name, path in release_image_digest_sources.items()
             },
             "approved_artifact_roots": [
                 str(tmp_path),
@@ -253,9 +247,7 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
                 str(release_root),
                 str(ROOT / "contracts"),
             ],
-            "socket_sources": {
-                name: str(path) for name, path in socket_sources.items()
-            },
+            "socket_sources": {name: str(path) for name, path in socket_sources.items()},
             "peer_acl_hashes": dict(local_expectation.peer_acl_hashes),
             "dynamic_fact_sources": {
                 name: str(path) for name, path in dynamic_fact_sources.items()
@@ -296,14 +288,10 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
         output_directory.chmod(0o2775)
         runtime_artifacts = AttestationRuntimeArtifacts(
             keyring_path=artifact_sources["host_config_trust_root_hash"].path,
-            keyring_schema_path=artifact_sources[
-                "verification_keyring_schema_hash"
-            ].path,
+            keyring_schema_path=artifact_sources["verification_keyring_schema_hash"].path,
             trust_bundle_path=artifact_sources["trust_bundle_content_hash"].path,
             trust_bundle_schema_path=artifact_sources["trust_bundle_schema_hash"].path,
-            startup_evidence_schema_path=artifact_sources[
-                "startup_evidence_schema_hash"
-            ].path,
+            startup_evidence_schema_path=artifact_sources["startup_evidence_schema_hash"].path,
         )
         issued = issue_and_publish_once(
             plan_path=plan_path,
@@ -332,8 +320,7 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
                     runtime_artifacts,
                     startup_evidence_schema_path=ROOT / "config/rate-budget.schema.json",
                 ),
-                evidence_output_path=output_directory
-                / "wrong-schema-startup-evidence.json",
+                evidence_output_path=output_directory / "wrong-schema-startup-evidence.json",
                 forbidden_repository_root=ROOT,
                 now=NOW,
             )
@@ -347,8 +334,7 @@ def test_local_facts_assembler_remeasures_files_boot_and_sockets(
                 trust_bundle=replace(local_bundle, bundle_hash="0" * 64),
                 signer_key=signer,
                 runtime_artifacts=runtime_artifacts,
-                evidence_output_path=output_directory
-                / "wrong-bundle-startup-evidence.json",
+                evidence_output_path=output_directory / "wrong-bundle-startup-evidence.json",
                 forbidden_repository_root=ROOT,
                 now=NOW,
             )
@@ -507,9 +493,7 @@ def test_startup_observations_must_precede_issuance_and_remain_fresh(
         observation["observed_at"] = observed_at
     digest = canonical_digest(evidence["content"])
     evidence["evidence_hash"] = digest.hex()
-    evidence["signature"]["signature_base64"] = base64.b64encode(
-        signer.sign(digest)
-    ).decode()
+    evidence["signature"]["signature_base64"] = base64.b64encode(signer.sign(digest)).decode()
     with pytest.raises(
         AuthorizationDenied,
         match="STARTUP_EVIDENCE_OBSERVATIONS_INVALID",
@@ -560,9 +544,7 @@ def test_signed_but_locally_mismatched_measurements_are_rejected(
         changed["content"][section][field] = wrong_value
     digest = canonical_digest(changed["content"])
     changed["evidence_hash"] = digest.hex()
-    changed["signature"]["signature_base64"] = base64.b64encode(
-        signer.sign(digest)
-    ).decode()
+    changed["signature"]["signature_base64"] = base64.b64encode(signer.sign(digest)).decode()
     with pytest.raises(AuthorizationDenied, match="STARTUP_EVIDENCE_BINDING_MISMATCH"):
         verify_startup_evidence(
             changed,
@@ -629,8 +611,7 @@ def test_issuer_rejects_a_process_outside_the_frozen_holder_identity(
             key_id="host-attestation-2026q3",
             nonce="startup-issuance-nonce-0001",
             expectation=_expectation(evidence["content"]),
-            evidence_schema_path=ROOT
-            / "contracts/host-rate-startup-evidence.schema.json",
+            evidence_schema_path=ROOT / "contracts/host-rate-startup-evidence.schema.json",
             now=NOW,
         )
 
@@ -700,10 +681,13 @@ def test_atomic_publication_and_monitor_reverify_the_current_file(
         ROOT / "contracts/host-rate-startup-evidence.schema.json",
         local_bundle,
     )
-    assert monitor.require_ready(
-        expectation=expectation,
-        now=NOW,
-    ).content_hash == evidence["evidence_hash"]
+    assert (
+        monitor.require_ready(
+            expectation=expectation,
+            now=NOW,
+        ).content_hash
+        == evidence["evidence_hash"]
+    )
     with pytest.raises(AuthorizationDenied, match="STARTUP_EVIDENCE_BINDING_MISMATCH"):
         monitor.require_ready(
             expectation=replace(expectation, measurement_hash="0" * 64),

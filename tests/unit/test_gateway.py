@@ -285,16 +285,14 @@ class FakeRateClient:
         self.notifications.append(document)
 
 
-def _gateway_fixture(now: datetime) -> tuple[
-    GatewaySendApplication, FakeRateClient, dict[str, Any], list[bytes]
-]:
+def _gateway_fixture(
+    now: datetime,
+) -> tuple[GatewaySendApplication, FakeRateClient, dict[str, Any], list[bytes]]:
     bundle_document, keyring, keyring_hash, _ = _signed_policy()
     bundle = verify_runtime_trust_bundle(
         bundle_document, keyring, expected_keyring_hash=keyring_hash, now=now
     )
-    not_applicable = CostRule(
-        mode="NOT_APPLICABLE", fixed_cost=0, parameter_name=None, tiers=()
-    )
+    not_applicable = CostRule(mode="NOT_APPLICABLE", fixed_cost=0, parameter_name=None, tiers=())
     endpoint = EndpointPolicy(
         endpoint_id="REST_QUERY_TIME",
         authority="BINANCE_PRODUCTION_FAPI",
@@ -305,9 +303,7 @@ def _gateway_fixture(now: datetime) -> tuple[
         control_frame_type=None,
         allowed_operation_classes=frozenset({"HOST_RATE_CONTROL"}),
         causal_role_class_map={"HOST_RATE_CONTROL": "HOST_RATE_CONTROL"},
-        request_weight_rule=CostRule(
-            mode="FIXED", fixed_cost=1, parameter_name=None, tiers=()
-        ),
+        request_weight_rule=CostRule(mode="FIXED", fixed_cost=1, parameter_name=None, tiers=()),
         order_count_rule=not_applicable,
         websocket_control_rule=not_applicable,
         connection_attempt_rule=not_applicable,
@@ -332,9 +328,7 @@ def _gateway_fixture(now: datetime) -> tuple[
         }
     )
     request = request.model_copy(
-        update={
-            "wire_bytes_hash": hashlib.sha256(prepared_wire_bytes(request)).hexdigest()
-        }
+        update={"wire_bytes_hash": hashlib.sha256(prepared_wire_bytes(request)).hexdigest()}
     )
     request = request.model_copy(
         update={"canonical_request_hash": derive_canonical_request_hash(request)}
@@ -414,8 +408,7 @@ def test_gateway_pipeline_consumes_then_sends_once_and_records_outcome() -> None
     assert list(Draft202012Validator(rate_schema).iter_errors(rate.notifications[0])) == []
     gateway_schema = json.loads(
         (
-            Path(__file__).resolve().parents[2]
-            / "contracts/binance-gateway-ipc.schema.json"
+            Path(__file__).resolve().parents[2] / "contracts/binance-gateway-ipc.schema.json"
         ).read_text(encoding="utf-8")
     )
     result_schema = {

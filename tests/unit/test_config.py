@@ -25,6 +25,19 @@ def test_known_config_validates() -> None:
     assert isinstance(config, dict)
 
 
+def test_copy_trading_config_is_testnet_only_and_validates() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = validate_config(
+        root / "config/copy-trading.example.yaml",
+        root / "config/copy-trading.schema.json",
+    )
+    assert config["environment"] == "TESTNET"
+    assert config["attribution"]["exchange_position_mode"] == "HEDGE"
+    assert config["attribution"]["history_replay"] == "FORBIDDEN"
+    assert config["risk"]["per_position_stop"] is False
+    assert config["source"]["browser_fallback"]["enabled"] is False
+
+
 @pytest.mark.parametrize(
     ("suffix", "document"),
     [

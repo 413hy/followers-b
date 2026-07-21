@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "copy-production-activation.schema.json",
+  "title": "Copy-trading production activation manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "environment",
+    "activation_id",
+    "api_key_sha256",
+    "issued_at",
+    "expires_at",
+    "rest_base",
+    "maximum_operating_envelope_usdt",
+    "dedicated_futures_account_confirmed",
+    "hedge_mode_confirmed",
+    "reuse_testnet_database",
+    "real_orders_acknowledgement"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "environment": { "const": "PRODUCTION" },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,64}$"
+    },
+    "api_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "rest_base": { "const": "https://fapi.binance.com" },
+    "maximum_operating_envelope_usdt": { "const": "150" },
+    "dedicated_futures_account_confirmed": { "const": true },
+    "hedge_mode_confirmed": { "const": true },
+    "reuse_testnet_database": { "const": false },
+    "real_orders_acknowledgement": {
+      "const": "I_ACKNOWLEDGE_THIS_PROFILE_SUBMITS_REAL_BINANCE_FUTURES_ORDERS"
+    }
+  }
+}

@@ -142,7 +142,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP TRIGGER observations_header_reconciliation ON rate_control.observations"
-    )
+    op.execute("DROP TRIGGER observations_header_reconciliation ON rate_control.observations")
     op.execute("DROP FUNCTION rate_control.reconcile_header_observation()")

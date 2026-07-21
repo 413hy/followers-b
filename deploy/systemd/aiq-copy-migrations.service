@@ -1,0 +1,39 @@
+[Unit]
+Description=Apply AI Quant copy-trading business migrations
+After=aiq-copy-infra.service
+Requires=aiq-copy-infra.service
+Before=aiq-copy-poller.service aiq-copy-telegram.service aiq-copy-watchdog.service aiq-copy-leader-selector.service aiq-copy-long-leader-selector.service aiq-copy-codex-audit.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/root/quantify/ai-quant-system
+Environment=AIQ_BUSINESS_DATABASE_URL_FILE=/run/ai-quant-secrets/copy-business-database-url
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/alembic -c migrations/business/alembic.ini upgrade head
+RemainAfterExit=yes
+TimeoutStartSec=120
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=read-only
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

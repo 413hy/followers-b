@@ -17,7 +17,14 @@ if database_url_file:
     with open(database_url_file, encoding="utf-8") as stream:
         database_url = stream.read().strip()
 if database_url:
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    sqlalchemy_url = database_url
+    if sqlalchemy_url.startswith("postgresql://"):
+        sqlalchemy_url = sqlalchemy_url.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    config.set_main_option("sqlalchemy.url", sqlalchemy_url.replace("%", "%%"))
 target_metadata = None
 
 

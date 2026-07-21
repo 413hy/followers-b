@@ -27,20 +27,21 @@ def test_raw_document_and_content_hash_modes_are_exact(tmp_path: Path) -> None:
     expected = {
         "schema_hash": hashlib.sha256(raw.read_bytes()).hexdigest(),
         "policy_hash": canonical_digest({"enabled": True, "limit": 3}).hex(),
-        "content_hash": canonical_digest(
-            {"status": "SIGNED_RUNTIME", "limit": 3}
-        ).hex(),
+        "content_hash": canonical_digest({"status": "SIGNED_RUNTIME", "limit": 3}).hex(),
     }
     sources = {
         "schema_hash": ArtifactBindingSource(raw, ArtifactHashMode.RAW_BYTES),
         "policy_hash": ArtifactBindingSource(document, ArtifactHashMode.JCS_DOCUMENT),
         "content_hash": ArtifactBindingSource(content, ArtifactHashMode.JCS_CONTENT),
     }
-    assert verify_artifact_bindings(
-        expected,
-        sources,
-        approved_roots=(tmp_path,),
-    ) == expected
+    assert (
+        verify_artifact_bindings(
+            expected,
+            sources,
+            approved_roots=(tmp_path,),
+        )
+        == expected
+    )
 
 
 def test_artifact_mismatch_and_symlink_fail_closed(tmp_path: Path) -> None:

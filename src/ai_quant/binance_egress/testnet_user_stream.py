@@ -165,9 +165,7 @@ class UserDataEventJournal:
     def note_error(self, error: BaseException) -> None:
         self._update(last_error_type=type(error).__name__)
 
-    def record_event(
-        self, document: Mapping[str, Any], *, received_at: str | None = None
-    ) -> bool:
+    def record_event(self, document: Mapping[str, Any], *, received_at: str | None = None) -> bool:
         event_type = document.get("e")
         event_time = document.get("E")
         if event_type not in ALLOWED_USER_EVENT_TYPES or not isinstance(event_time, int):
@@ -179,9 +177,7 @@ class UserDataEventJournal:
         stable_event_id = hashlib.sha256(_canonical(sanitized)).hexdigest()
         with self._lock:
             if stable_event_id in self._seen:
-                self._state["duplicate_event_count"] = (
-                    int(self._state["duplicate_event_count"]) + 1
-                )
+                self._state["duplicate_event_count"] = int(self._state["duplicate_event_count"]) + 1
                 self._write_state_locked()
                 return False
             received = received_at or _utc_now()
@@ -486,9 +482,7 @@ def _sanitize_value(value: Any) -> Any:
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def _utc_now() -> str:

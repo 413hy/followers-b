@@ -55,9 +55,7 @@ def _artifact_hash(source: ArtifactBindingSource) -> str:
     except (OSError, ConfigurationError) as exc:
         raise AuthorizationDenied("ARTIFACT_CONTENT_INVALID") from exc
     if source.hash_mode is ArtifactHashMode.JCS_CONTENT:
-        if not isinstance(document, Mapping) or not isinstance(
-            document.get("content"), Mapping
-        ):
+        if not isinstance(document, Mapping) or not isinstance(document.get("content"), Mapping):
             raise AuthorizationDenied("ARTIFACT_CONTENT_INVALID")
         document = document["content"]
     try:

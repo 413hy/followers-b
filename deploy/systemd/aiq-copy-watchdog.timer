@@ -1,0 +1,11 @@
+[Unit]
+Description=Run deterministic copy watchdog every 30 minutes
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+AccuracySec=1min
+Unit=aiq-copy-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -145,9 +145,7 @@ class AutomaticTradeEngine:
         _require_utc(now, "cycle time")
         _require_utc(snapshot.observed_at, "snapshot time")
         if len(intents) > self._limits.maximum_intents_per_cycle:
-            return tuple(
-                _rejected(intent, "AUTOMATION_CYCLE_INTENT_LIMIT") for intent in intents
-            )
+            return tuple(_rejected(intent, "AUTOMATION_CYCLE_INTENT_LIMIT") for intent in intents)
         outcomes: list[AutomaticTradeOutcome] = []
         projected_positions = snapshot.open_positions
         seen_this_cycle: set[str] = set()
@@ -214,12 +212,15 @@ class AutomaticTradeEngine:
             reasons.append("AUTOMATION_DECISION_EVIDENCE_INVALID")
         if not intent.symbol.endswith("USDT") or not intent.symbol.isalnum():
             reasons.append("AUTOMATION_SYMBOL_INVALID")
-        if min(
-            intent.quantity,
-            intent.entry_assumption,
-            intent.stop_trigger,
-            intent.target_trigger,
-        ) <= 0:
+        if (
+            min(
+                intent.quantity,
+                intent.entry_assumption,
+                intent.stop_trigger,
+                intent.target_trigger,
+            )
+            <= 0
+        ):
             reasons.append("AUTOMATION_PRICE_OR_QUANTITY_INVALID")
         if intent.side is TradeSide.LONG:
             protected = intent.stop_trigger < intent.entry_assumption < intent.target_trigger

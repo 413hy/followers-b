@@ -177,9 +177,7 @@ class RateBudgetApplication:
             facts = request.get("gateway_derived_operation_facts")
             if not isinstance(facts, Mapping):
                 raise AuthorizationDenied("RATE_OPERATION_FACTS_INVALID")
-            if request.get("gateway_derived_operation_facts_hash") != canonical_digest(
-                facts
-            ).hex():
+            if request.get("gateway_derived_operation_facts_hash") != canonical_digest(facts).hex():
                 raise AuthorizationDenied("RATE_OPERATION_FACTS_HASH_MISMATCH")
             semantic_action = facts.get("semantic_action")
             operation_class = endpoint.causal_role_class_map.get(str(semantic_action))

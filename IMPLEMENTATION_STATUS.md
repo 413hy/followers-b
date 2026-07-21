@@ -1,80 +1,63 @@
 # Implementation status
 
-Updated: `2026-07-16T03:48:49Z`
+Updated: `2026-07-21`
 
-Overall state: `FRAMEWORK_READY / AUTOMATION_ENGINE_READY / NO_BUILTIN_STRATEGY /
-UNATTENDED_DISABLED / PRODUCTION_RISK_LOCKED`
+Overall state: `COPY_TESTNET_IMPLEMENTED / AUTOMATION_ENABLED / PRODUCTION_LOCKED`
 
-## Reset outcome
+## Current product
 
-The previous V4/V5 Testnet strategy product has been removed so this repository can be used as a
-clean execution framework for a new project. The deletion includes the old strategy state machine,
-strategy-owned Testnet executor and campaign, strategy Telegram dashboard, replay/result tools,
-strategy tests, strategy ADRs and repository-local strategy evidence. Generic automatic execution
-has now been separated from those deleted strategy rules and retained as a reusable engine.
+The repository retains the strategy-free trading framework and now includes a project-owned
+copy-trading subsystem under `ai_quant.copy_trading`. The subsystem does not invent a market
+strategy: its external decision source is the incremental public operation history of selected
+Binance lead traders. It normalizes those operations into explicit increase/reduce signals and
+executes them through a bounded Testnet adapter.
 
-The old automated campaign and dashboard were stopped and disabled while the account had no active
-position or pending entry. Their installed systemd units were removed. Historical runtime evidence
-under `/var/lib/ai-quant/evidence/testnet/campaign/` was not altered; it is outside the source
-repository and can be archived separately if desired.
+Implemented runtime components include:
 
-## Retained capabilities
+- public Binance lead-trader discovery and 30-second incremental history polling;
+- one long-term, two short-term and two owner-managed custom slots;
+- deterministic candidate filtering plus structured Codex selection review;
+- isolated per-leader virtual position, order, multiplier and PnL attribution;
+- protected-limit entries, market reductions and idempotent exchange reconciliation;
+- a shared 150-USDT logical envelope with reserve, order and symbol margin limits;
+- account, line, leader and position PnL baselines and Telegram presentation;
+- Telegram operations with authorization and two-step confirmation;
+- PostgreSQL migrations, append-only business events and a transactional outbox;
+- systemd startup, daily/weekly selection, watchdog, Codex audit/repair, backup and incident replay.
 
-- Debian 12 Bookworm/aarch64 platform validation and locked deployment controls.
-- Market-data contracts, order-book reconstruction, archive/retention and deterministic replay.
-- Reusable PA and Order Flow feature calculators without decision authority.
-- Universe ranking/membership and fee/net-edge utilities.
-- Generic risk sizing, exchange filter handling and maximum-loss validation.
-- Strategy-agnostic automatic intent validation, idempotency, environment/time/position/loss gates
-  and protected executor delegation.
-- Order intent/state models, Binance response classification, UNKNOWN reconciliation, conservative
-  simulator and native stop/take-profit planning.
-- Binance Testnet safe capability, order lifecycle, risk profile and native-protection probes.
-- Read-only Testnet user stream and root-only volatile credential materializer.
-- Control, notification, monitoring, backup, orchestration, iteration and validation components.
-- Business and host-control database migration trees.
+## Deployment boundary
 
-## Deliberately missing
+The checked-in default deployment is Binance USD-M Futures Testnet. Production code paths and
+separate production deployment units exist, but production remains locked behind a dedicated
+database, credentials, activation document, environment binding and clean-account checks. A
+Testnet database must never be reused for production.
 
-- No strategy implementation exists under `ai_quant.strategy` beyond an empty extension package.
-- No executable module chooses symbols, directions, entries, targets or exits.
-- No unattended service is currently installed or enabled; a new project must supply the decision,
-  risk/cost gate and protected executor adapters before activating one.
-- No strategy-specific dashboard or PnL/win-rate report remains.
-- No production transport or credential is enabled; production remains `RISK_LOCKED`.
+All systemd units use `/root/quantify/ai-quant-system`. Runtime credentials are materialized from
+root-only files outside the repository into `/run/ai-quant-secrets`. Database volumes, backups,
+Codex authentication and runtime evidence also remain outside Git.
 
-## Framework validation
+## Verification
 
-Post-reset validation on Debian 12/aarch64:
-
-- Full pytest: 260 passed.
-- CI suites: 197 unit, 19 property, 2 contract and 17 security tests passed.
-- Ruff passed; strict mypy passed over 89 source files; Bandit and secret scan passed.
-- Contract/config/provenance/Compose checks passed.
-- Deployment validation passed with two retained Testnet services and no strategy unit.
-- Debian host validation passed on the 2-vCPU, approximately 12-GiB, 200-GB OCI host.
-
-Reproduce:
+The current source snapshot passes 609 pytest tests on Debian 12/aarch64, together with focused
+Ruff validation. Before deployment or upgrade, run:
 
 ```bash
-make validate-debian-platform
-make ci
+uv sync --frozen --all-groups
+uv run ruff check src tests tools scripts migrations
+uv run mypy src
 uv run pytest -q
 ```
 
-The authoritative retained scope and extension boundary are documented in
-`docs/FRAMEWORK_SCOPE.md` and ADR 0039.
+Database migrations must report the single current Alembic head before services start. Live
+Testnet acceptance additionally requires successful leader polls, a healthy watchdog, Telegram
+delivery and explicit operator confirmation before new entries are allowed.
 
-## New-project requirements
+## Documentation
 
-A future project must provide, as new code rather than hidden configuration:
+- Product overview: `README.md`
+- Complete Testnet deployment: `docs/deployment/copy-trading-vps.md`
+- Copy-trading behavior: `docs/architecture/copy-trading-testnet.md`
+- Production cutover boundary: `docs/deployment/copy-production-cutover.md`
+- Failure matrix: `docs/architecture/copy-trading-failure-matrix.md`
 
-1. A versioned signal/decision contract.
-2. Explicit entry, exit and position-ownership rules.
-3. Fee/slippage-aware expected-value and risk gates.
-4. Deterministic unit, replay and fault tests.
-5. A separate deployment service that remains disabled until Testnet review passes.
-6. New evidence and documentation that do not reuse old strategy win/loss claims.
-
-Runtime credentials, Telegram inputs, server passwords, raw Codex state and account-identifying
-evidence must remain outside Git.
+Passing offline tests is not evidence that production trading is approved or safe.

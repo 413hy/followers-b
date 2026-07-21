@@ -86,9 +86,7 @@ def _signed_policy(
     risk_issuer["key_id"] = "risk-authority-key-test"
     risk_issuer["public_key_base64"] = _public_base64(risk_key)
     if attestation_signer is not None:
-        content["attestation_signers"][0]["public_key_base64"] = _public_base64(
-            attestation_signer
-        )
+        content["attestation_signers"][0]["public_key_base64"] = _public_base64(attestation_signer)
     bundle_digest = canonical_digest(content)
     bundle["bundle_hash"] = bundle_digest.hex()
     bundle["signature"] = {
@@ -202,9 +200,7 @@ def test_unsigned_engineering_bundle_is_never_runtime_policy() -> None:
     bundle, keyring, keyring_hash, _ = _signed_policy()
     bundle["content"]["bundle_status"] = "UNVALIDATED_ENGINEERING_BASELINE"
     with pytest.raises(AuthorizationDenied, match="TRUST_BUNDLE_NOT_RUNTIME"):
-        verify_runtime_trust_bundle(
-            bundle, keyring, expected_keyring_hash=keyring_hash, now=NOW
-        )
+        verify_runtime_trust_bundle(bundle, keyring, expected_keyring_hash=keyring_hash, now=NOW)
 
 
 def test_loader_requires_pinned_root_owned_read_only_keyring(tmp_path: Path) -> None:
@@ -305,6 +301,4 @@ def test_tampered_bundle_signature_is_rejected() -> None:
     tampered = copy.deepcopy(bundle)
     tampered["signature"]["signature_base64"] = base64.b64encode(b"x" * 64).decode()
     with pytest.raises(AuthorizationDenied, match="TRUST_BUNDLE_SIGNATURE_INVALID"):
-        verify_runtime_trust_bundle(
-            tampered, keyring, expected_keyring_hash=keyring_hash, now=NOW
-        )
+        verify_runtime_trust_bundle(tampered, keyring, expected_keyring_hash=keyring_hash, now=NOW)

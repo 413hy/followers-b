@@ -6,9 +6,9 @@ from tools.preflight_audit import validate_jcs_hashes, validate_schemas_and_exam
 def test_all_schemas_and_examples() -> None:
     root = Path(__file__).resolve().parents[2]
     result = validate_schemas_and_examples(root)
-    assert result["schema_count"] == 42
+    assert result["schema_count"] == 47
     assert result["contract_instance_count"] == 39
-    assert result["config_instance_count"] == 14
+    assert result["config_instance_count"] == 16
     assert result["failures"] == []
 
 

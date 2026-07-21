@@ -312,21 +312,13 @@ class GatewaySendApplication:
                     "fencing_epoch": consume["fencing_epoch"],
                     "send_deadline": consume["send_deadline"],
                     "canonical_request_hash": consume["canonical_request_hash"],
-                    "gateway_derived_parameter_hash": consume[
-                        "gateway_derived_parameter_hash"
-                    ],
-                    "gateway_derived_wire_bytes_hash": consume[
-                        "gateway_derived_wire_bytes_hash"
-                    ],
+                    "gateway_derived_parameter_hash": consume["gateway_derived_parameter_hash"],
+                    "gateway_derived_wire_bytes_hash": consume["gateway_derived_wire_bytes_hash"],
                     "gateway_derived_operation_facts_hash": consume[
                         "gateway_derived_operation_facts_hash"
                     ],
-                    "causal_capability_payload_hash": consume[
-                        "causal_capability_payload_hash"
-                    ],
-                    "gateway_request_document_hash": consume[
-                        "gateway_request_document_hash"
-                    ],
+                    "causal_capability_payload_hash": consume["causal_capability_payload_hash"],
+                    "gateway_request_document_hash": consume["gateway_request_document_hash"],
                 }
             )
         except (KeyError, ValueError, GatewayDenied):
@@ -473,9 +465,7 @@ class GatewaySendApplication:
             "gateway_derived_operation_facts_hash": consume_request[
                 "gateway_derived_operation_facts_hash"
             ],
-            "causal_capability_payload_hash": permit_binding[
-                "causal_capability_payload_hash"
-            ],
+            "causal_capability_payload_hash": permit_binding["causal_capability_payload_hash"],
             "fencing_epoch": permit_binding["fencing_epoch"],
         }
         if any(response.get(key) != value for key, value in expected.items()):
@@ -735,11 +725,7 @@ def validate_destination(request: ClosedGatewayRequest) -> None:
         if is_testnet_authority
         else request.environment in {"shadow", "paper", "production"}
     )
-    if (
-        not environment_matches
-        or expected is None
-        or (request.scheme, request.host) != expected
-    ):
+    if not environment_matches or expected is None or (request.scheme, request.host) != expected:
         raise GatewayDenied("DESTINATION_NOT_ALLOWLISTED")
 
 

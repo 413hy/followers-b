@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "copy-leader-selection.schema.json",
+  "title": "Daily Copy Leader Selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "selected_leader_ids", "decisions", "portfolio_summary", "risk_notes"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "selected_leader_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "pattern": "^[0-9]{10,24}$" }
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lead_portfolio_id", "confidence", "reasons", "concerns"],
+        "properties": {
+          "lead_portfolio_id": { "type": "string", "pattern": "^[0-9]{10,24}$" },
+          "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+          "reasons": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+          },
+          "concerns": {
+            "type": "array",
+            "maxItems": 6,
+            "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+          }
+        }
+      }
+    },
+    "portfolio_summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "risk_notes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    }
+  }
+}

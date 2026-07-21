@@ -10,9 +10,7 @@ from ai_quant.rate_budget.authorization import AuthorizationDenied
 
 
 def _inputs() -> dict[str, Any]:
-    authorities = frozenset(
-        {"BINANCE_PRODUCTION_FAPI", "BINANCE_PRODUCTION_FSTREAM"}
-    )
+    authorities = frozenset({"BINANCE_PRODUCTION_FAPI", "BINANCE_PRODUCTION_FSTREAM"})
     return {
         "rate_allocator_probe_ready": True,
         "gateway_probe_ready": True,

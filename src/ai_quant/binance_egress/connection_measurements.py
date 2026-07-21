@@ -119,9 +119,7 @@ def verify_stream_connection_profiles(
         ):
             raise AuthorizationDenied("CONNECTION_CONTRACT_COVERAGE_INVALID")
         for source_id in source_ids:
-            covered_source = (
-                sources.get(source_id) if isinstance(source_id, str) else None
-            )
+            covered_source = sources.get(source_id) if isinstance(source_id, str) else None
             if covered_source is None:
                 raise AuthorizationDenied("CONNECTION_CONTRACT_SOURCE_INVALID")
             covered_authorities = covered_source.get("covered_authorities")

@@ -57,10 +57,7 @@ def test_approved_quantity_never_exceeds_any_risk_budget(
     if decision.approved:
         assert decision.reserved_risk <= decision.available_risk
         assert decision.quantity % request.step_size == 0
-        assert (
-            decision.quantity * request.entry_assumption
-            <= request.equity * Decimal(125)
-        )
+        assert decision.quantity * request.entry_assumption <= request.equity * Decimal(125)
 
 
 def test_risk_multiplier_scales_money_limits_but_not_position_count() -> None:

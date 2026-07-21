@@ -37,9 +37,7 @@ def _inputs() -> dict[str, Any]:
     rate_limit = _payload("rate-exchange-limit-observation.json", NOW - timedelta(seconds=1))
     connection = _payload("rate-connection-state-observation.json", NOW)
     return {
-        "enabled_authorities": frozenset(
-            {"BINANCE_PRODUCTION_FAPI", "BINANCE_PRODUCTION_FSTREAM"}
-        ),
+        "enabled_authorities": frozenset({"BINANCE_PRODUCTION_FAPI", "BINANCE_PRODUCTION_FSTREAM"}),
         "observation_rows": [_row(server_time), _row(rate_limit), _row(connection)],
         "stream_profiles": {
             "BINANCE_PRODUCTION_FSTREAM": StreamConnectionProfile(
@@ -56,13 +54,9 @@ def test_authority_measurements_close_rest_and_stream_bindings() -> None:
     by_authority = {item["endpoint_authority"]: item for item in measured}
     rest = by_authority["BINANCE_PRODUCTION_FAPI"]
     assert rest["server_time_observation_id"] == "rate-time-observation-0001"
-    assert rest["exchange_rate_limit_observation_id"] == (
-        "rate-limit-observation-0001"
-    )
+    assert rest["exchange_rate_limit_observation_id"] == ("rate-limit-observation-0001")
     stream = by_authority["BINANCE_PRODUCTION_FSTREAM"]
-    assert stream["connection_profile_id"] == (
-        "production-fstream-profile-20260713"
-    )
+    assert stream["connection_profile_id"] == ("production-fstream-profile-20260713")
 
 
 def test_authority_measurements_reject_cross_bootstrap_pairing() -> None:

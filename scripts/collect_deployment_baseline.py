@@ -72,8 +72,7 @@ def public_ip(url: str) -> str:
 
 def dns_addresses(name: str) -> list[str]:
     addresses = {
-        item[4][0]
-        for item in socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)
+        item[4][0] for item in socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)
     }
     if not addresses:
         raise RuntimeError("DNS returned no IPv4 addresses")
@@ -217,16 +216,12 @@ def summarize(records: list[dict[str, Any]], minimum_duration: int) -> dict[str,
         (right["monotonic_ns"] - left["monotonic_ns"]) / 1_000_000_000
         for left, right in itertools.pairwise(contents)
     ]
-    public_values = {
-        value for content in contents for value in content["public_ipv4"].values()
-    }
+    public_values = {value for content in contents for value in content["public_ipv4"].values()}
     offsets = [
-        abs(float(content["chrony"].get("system_offset_seconds", 999.0)))
-        for content in contents
+        abs(float(content["chrony"].get("system_offset_seconds", 999.0))) for content in contents
     ]
     packet_losses = [
-        float(content["gateway_ping"].get("packet_loss_percent", 100.0))
-        for content in contents
+        float(content["gateway_ping"].get("packet_loss_percent", 100.0)) for content in contents
     ]
     failures: list[str] = []
     if duration < minimum_duration:
@@ -280,17 +275,21 @@ def command_collect(args: argparse.Namespace) -> int:
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o600,
     )
-    started = time.monotonic()
     previous = "0" * 64
     sequence = 0
+    first_sample_ns: int | None = None
     with os.fdopen(descriptor, "wb") as handle:
         while True:
-            previous = append_record(handle, capture(sequence), previous)
+            content = capture(sequence)
+            previous = append_record(handle, content, previous)
             sequence += 1
-            elapsed = time.monotonic() - started
-            if elapsed >= args.duration_seconds:
+            sample_ns = int(content["monotonic_ns"])
+            if first_sample_ns is None:
+                first_sample_ns = sample_ns
+            recorded_duration = (sample_ns - first_sample_ns) / 1_000_000_000
+            if recorded_duration >= args.duration_seconds:
                 break
-            time.sleep(min(args.interval_seconds, args.duration_seconds - elapsed))
+            time.sleep(min(args.interval_seconds, args.duration_seconds - recorded_duration))
     records = load_and_verify(args.output)
     summary = summarize(records, args.duration_seconds)
     summary_path = args.output.with_suffix(args.output.suffix + ".summary.json")

@@ -40,6 +40,53 @@ def test_listen_key_keepalive_uses_only_testnet_rest_destination() -> None:
     assert "listenKey=" + "a" * 32 in calls[0][1]
 
 
+def test_hedge_mode_and_account_information_use_signed_testnet_only() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def transport(
+        method: str, url: str, headers: Mapping[str, str], body: bytes | None
+    ) -> HttpResult:
+        del headers, body
+        calls.append((method, url))
+        if "/positionSide/dual" in url:
+            return _result({"code": 200, "msg": "success"})
+        return _result({"totalWalletBalance": "150"})
+
+    client = BinanceTestnetClient("test-key", "test-secret", transport=transport)
+    client.change_position_mode(hedge_mode=True)
+    account = client.account_information()
+    client.account_information_v2()
+
+    assert account["totalWalletBalance"] == "150"
+    assert calls[0][0] == "POST"
+    assert calls[0][1].startswith(
+        "https://demo-fapi.binance.com/fapi/v1/positionSide/dual?dualSidePosition=true"
+    )
+    assert calls[1][0] == "GET"
+    assert calls[1][1].startswith("https://demo-fapi.binance.com/fapi/v3/account?")
+    assert calls[2][1].startswith("https://demo-fapi.binance.com/fapi/v2/account?")
+
+
+def test_all_open_orders_is_signed_and_has_no_symbol_filter() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def transport(
+        method: str, url: str, headers: Mapping[str, str], body: bytes | None
+    ) -> HttpResult:
+        del headers, body
+        calls.append((method, url))
+        return _result([])
+
+    client = BinanceTestnetClient("test-key", "test-secret", transport=transport)
+    assert client.all_open_orders() == []
+    parsed = urllib.parse.urlparse(calls[0][1])
+    query = urllib.parse.parse_qs(parsed.query)
+    assert calls[0][0] == "GET"
+    assert parsed.path == "/fapi/v1/openOrders"
+    assert "symbol" not in query
+    assert "signature" in query
+
+
 def test_safe_probe_never_uses_production_and_redacts_ephemeral_values(tmp_path: Path) -> None:
     key = tmp_path / "key"
     secret = tmp_path / "secret"
@@ -162,18 +209,12 @@ def test_real_order_lifecycle_places_queries_cancels_and_finishes_flat(tmp_path:
             return _result({})
         if parsed.path == "/fapi/v1/order" and method == "POST":
             order_status = "NEW"
-            return _result(
-                {"clientOrderId": query["newClientOrderId"][0], "status": "NEW"}
-            )
+            return _result({"clientOrderId": query["newClientOrderId"][0], "status": "NEW"})
         if parsed.path == "/fapi/v1/order" and method == "GET":
-            return _result(
-                {"clientOrderId": query["origClientOrderId"][0], "status": order_status}
-            )
+            return _result({"clientOrderId": query["origClientOrderId"][0], "status": order_status})
         if parsed.path == "/fapi/v1/order" and method == "DELETE":
             order_status = "CANCELED"
-            return _result(
-                {"clientOrderId": query["origClientOrderId"][0], "status": order_status}
-            )
+            return _result({"clientOrderId": query["origClientOrderId"][0], "status": order_status})
         raise AssertionError((method, parsed.path))
 
     evidence = run_testnet_order_lifecycle(

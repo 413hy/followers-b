@@ -1,0 +1,44 @@
+[Unit]
+Description=AI Quant 30-second public leader Testnet copy executor
+After=network-online.target aiq-testnet-secrets.service aiq-copy-migrations.service
+Wants=network-online.target
+Requires=aiq-testnet-secrets.service aiq-copy-migrations.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+UMask=0077
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_trading --mode testnet --database-url-file /run/ai-quant-secrets/copy-business-database-url --api-key-file /run/ai-quant-secrets/binance-testnet-api-key --api-secret-file /run/ai-quant-secrets/binance-testnet-api-secret --repository-root /root/quantify/ai-quant-system --testnet-arm-file /run/ai-quant-secrets/copy-testnet-arm --interval-seconds 30
+ExecStopPost=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_failure_hook --source-unit aiq-copy-poller.service
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+InaccessiblePaths=/root/aiq-user-inputs /run/ai-quant-secrets/copy-telegram-bot-token /run/ai-quant-secrets/copy-telegram-chat-ids /run/ai-quant-secrets/copy-telegram-authorized-user-ids
+
+[Install]
+WantedBy=multi-user.target

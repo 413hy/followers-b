@@ -1,15 +1,11 @@
 # Chat continuity package
 
-This directory contains only a sanitized continuation prompt for the strategy-free framework.
+This directory contains a sanitized continuation prompt for another Codex/AI agent. It is not a
+verbatim export of private user conversations.
 
-File: `CONTINUE_WITH_ANOTHER_AI.md`, a ready-to-copy prompt for another Codex/AI agent.
+The raw `/root/.codex` directory, authentication state, SQLite state, shell snapshots, JSONL
+rollouts and tool transcripts must never be committed. Runtime Binance/Telegram credentials,
+database contents, VPS evidence and account identifiers also remain outside Git.
 
-This is a sanitized handoff, not a verbatim raw conversation. The raw `/root/.codex` directory is
-intentionally not committed. It contains authentication state,
-internal tool records and product metadata that do not belong in source control. In particular,
-`auth.json`, SQLite state, shell snapshots and raw JSONL rollouts must never be added to this
-repository. This handoff contains no credentials or production secrets.
-
-The original `/root/quantify/reference-materials` directory is outside this Git repository. It must
-be backed up and restored separately as read-only source material. Never reconstruct, edit or
-silently replace it from this handoff.
+Use `CONTINUE_WITH_ANOTHER_AI.md` together with the root README and deployment documentation when
+continuing maintenance.

@@ -38,7 +38,7 @@ cd /root/quantify/ai-quant-system
   --toolchain-lock deploy/host-toolchain.lock.yaml \
   --hardening-dir deploy/host-hardening \
   --ssh-port 22 \
-  --ssh-source-cidr 171.221.123.164/32 \
+  --ssh-source-cidr 198.51.100.164/32 \
   --operator-public-key /root/aiq-bootstrap-inputs/aiqops_authorized_key.pub \
   --approval-public-key /root/aiq-bootstrap-inputs/bootstrap-owner-ed25519.pub.pem \
   --off-host-backup-evidence /root/aiq-bootstrap-inputs/off-host-backup-evidence.json \
@@ -98,4 +98,3 @@ Final apply copies the existing Docker data root without deleting the old copy, 
 chrony, Docker/journald/sysctl/limits hardening, changes SSH to source-bound key-only `aiqops`, and
 adds a separate default-drop nftables input table. Oracle Cloud console rollback commands are
 included in the verification evidence.
-

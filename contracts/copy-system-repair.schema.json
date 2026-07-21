@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "summary",
+    "root_cause",
+    "changed_files",
+    "tests_run",
+    "follow_up_required"
+  ],
+  "properties": {
+    "status": {"type": "string", "enum": ["REPAIRED", "NO_CHANGE", "FAILED"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 800},
+    "root_cause": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "changed_files": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {"type": "string", "minLength": 1, "maxLength": 240}
+    },
+    "tests_run": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "maxLength": 300}
+    },
+    "follow_up_required": {"type": "boolean"}
+  }
+}

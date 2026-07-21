@@ -115,8 +115,7 @@ def validate_database_measurement_snapshot(
     if (
         not isinstance(raw_blocks, list)
         or not all(
-            isinstance(authority, str) and _ID.fullmatch(authority)
-            for authority in raw_blocks
+            isinstance(authority, str) and _ID.fullmatch(authority) for authority in raw_blocks
         )
         or len(set(raw_blocks)) != len(raw_blocks)
         or raw_blocks != sorted(raw_blocks)
@@ -135,12 +134,8 @@ def collect_database_measurements(
 ) -> Mapping[str, Mapping[str, Any]]:
     """Read both database sections in one serializable read-only snapshot."""
     with connection.transaction(), connection.cursor() as cursor:
-        cursor.execute(
-            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE"
-        )
-        cursor.execute(
-            "SELECT rate_control.read_startup_measurements() AS measurement"
-        )
+        cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
+        cursor.execute("SELECT rate_control.read_startup_measurements() AS measurement")
         row = cursor.fetchone()
     if row is None or set(row) != {"measurement"}:
         raise AuthorizationDenied("DATABASE_MEASUREMENT_INVALID")
@@ -187,9 +182,7 @@ def collect_authority_observations(
         raise AuthorizationDenied("AUTHORITY_MEASUREMENT_CONFIGURATION_INVALID")
     floor = now - timedelta(seconds=maximum_age_seconds)
     with connection.transaction(), connection.cursor() as cursor:
-        cursor.execute(
-            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE"
-        )
+        cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE")
         cursor.execute(
             """
             SELECT payload,payload_hash,occurred_at

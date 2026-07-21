@@ -1,0 +1,88 @@
+schema_version: 1.0.0
+environment: TESTNET
+source:
+  origin: https://www.binance.com
+  adapter_contract: UNDOCUMENTED_PUBLIC_WEB_BAPI
+  poll_interval_seconds: 30
+  page_size: 50
+  request_timeout_seconds: 10
+  maximum_response_bytes: 4194304
+  access_denied_action: FAIL_CLOSED_AND_NOTIFY
+  browser_fallback:
+    enabled: false
+    mode: NORMAL_CHROMIUM_SESSION
+    persistent_profile: true
+    anti_bot_evasion: false
+    captcha_bypass: false
+    proxy_rotation: false
+selection:
+  leader_count: 3
+  long_term_slots: 1
+  short_term_slots: 2
+  manual_custom_slots: 2
+  custom_slot_selection: TELEGRAM_OWNER_ONLY
+  candidate_pool_size: 100
+  time_range: 30D
+  minimum_win_rate_pct: "60"
+  maximum_drawdown_pct: "20"
+  minimum_aum_usdt: "7500"
+  initial_state: OBSERVE_ONLY_BASELINE
+  long_term_objective: COMPREHENSIVE_STABILITY
+  short_term_1_objective: HIGHEST_WIN_RATE
+  short_term_2_objective: DAILY_COMPOSITE
+  replacement_with_open_position: WAIT_FOR_CLOSE
+  long_term_replacement_wait: 1D
+  short_term_replacement_wait: 2H
+  replacement_timeout_action: KEEP_INCUMBENT_AND_CANCEL
+  short_minimum_orders_1d: 1
+  short_minimum_orders_3d: 5
+  short_minimum_orders_7d: 14
+  short_minimum_active_days_7d: 3
+portfolio:
+  operating_envelope_usdt: "150"
+  entry_allocation_usdt: "120"
+  reserve_usdt: "30"
+  default_leverage: 10
+  leverage_selection: EXCHANGE_MAXIMUM
+  maximum_leverage: 125
+  maximum_order_margin_usdt: "10"
+  maximum_symbol_margin_usdt: "20"
+  follow_multiplier_scope: PER_LEADER_ID
+  follow_multiplier_default: 1
+  follow_multiplier_minimum: 1
+  follow_multiplier_maximum: 10
+  insufficient_margin_action: RAISE_LEVERAGE_THEN_PROPORTIONAL_DOWNSIZE
+  single_order_priority: SOURCE_FILL_NOTIONAL_TARGET_WITHIN_CAPS
+  quantity_rounding: DOWN_TO_EXCHANGE_STEP
+  minimum_notional_action: IGNORE_AND_RECORD
+attribution:
+  exchange_position_mode: HEDGE
+  leader_isolation: VIRTUAL_LEDGER
+  same_symbol_same_side_exchange_behavior: AGGREGATED_WITH_INTERNAL_ATTRIBUTION
+  orphan_reduction_action: IGNORE_RECORD_NOTIFY
+  history_replay: FORBIDDEN
+risk:
+  per_position_stop: false
+  warning_equity_usdt: "120"
+  emergency_equity_usdt: "105"
+  warning_margin_ratio_pct: "65"
+  emergency_margin_ratio_pct: "80"
+  automatic_intervention: false
+  threshold_action: OBSERVE_ONLY
+  operator_decision_required: true
+schedules:
+  timezone: Asia/Shanghai
+  short_term_selection_daily: "00:00"
+  long_term_selection_weekly: "Sun 00:00"
+  codex_audit_minute: 5
+  watchdog_minutes: [15, 45]
+codex:
+  cli_path: /root/.local/bin/codex
+  model: gpt-5.6-sol
+  reasoning_effort: high
+  mode: SYSTEMD_CODEX_EXEC
+  sandbox: READ_ONLY_AUDIT
+  structured_output: true
+  secret_access: DENIED
+  direct_order_authority: DENIED
+  production_activation: LOCKED

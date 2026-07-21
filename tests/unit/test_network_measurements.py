@@ -109,9 +109,7 @@ def test_live_network_observer_runs_only_fixed_read_only_commands() -> None:
         responses = {
             ("/usr/sbin/nft", "--json", "list", "ruleset"): b'{"nftables":[]}',
             ("/usr/bin/docker", "ps", "--quiet"): f"{container_id}\n".encode(),
-            ("/usr/bin/docker", "network", "ls", "--quiet"): (
-                f"{network_id}\n".encode()
-            ),
+            ("/usr/bin/docker", "network", "ls", "--quiet"): (f"{network_id}\n".encode()),
             ("/usr/bin/docker", "inspect", container_id): b"[]",
             ("/usr/bin/docker", "network", "inspect", network_id): b"[]",
         }

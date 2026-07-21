@@ -36,9 +36,7 @@ from ai_quant.rate_budget.authorization import (
 )
 
 TRUSTED_PLAN_DIRECTORY = Path("/etc/ai-quant/trust")
-EVIDENCE_OUTPUT_PATH = Path(
-    "/run/ai-quant-attestation/host-rate-startup-evidence.json"
-)
+EVIDENCE_OUTPUT_PATH = Path("/run/ai-quant-attestation/host-rate-startup-evidence.json")
 REPOSITORY_ROOT = Path("/app")
 
 
@@ -125,8 +123,7 @@ def issue_and_publish_once(
     content_artifacts = content.get("artifact_binding")
     if (
         not isinstance(content_artifacts, Mapping)
-        or content_artifacts.get("trust_bundle_content_hash")
-        != trust_bundle.bundle_hash
+        or content_artifacts.get("trust_bundle_content_hash") != trust_bundle.bundle_hash
     ):
         raise AuthorizationDenied("ATTESTATION_TRUST_BUNDLE_BINDING_MISMATCH")
     document = issue_startup_evidence(
@@ -209,8 +206,7 @@ def run() -> None:
             signer = next(iter(trust_bundle.attestation_signers.values()))
             refresh_interval = min(
                 60,
-                signer.max_evidence_ttl_seconds
-                - signer.refresh_before_expiry_seconds,
+                signer.max_evidence_ttl_seconds - signer.refresh_before_expiry_seconds,
             )
             if refresh_interval < 1:
                 raise RuntimeError("attestation refresh interval is invalid")

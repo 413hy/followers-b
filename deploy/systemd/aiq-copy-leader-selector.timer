@@ -1,0 +1,11 @@
+[Unit]
+Description=Run short-term copy-leader selection daily at Shanghai 00:00
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=aiq-copy-leader-selector.service
+
+[Install]
+WantedBy=timers.target

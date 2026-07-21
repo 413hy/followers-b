@@ -120,9 +120,10 @@ def load_measurement_cycle_plan(
         "keyring_hash_file",
         "bootstrap_traces_file",
     }
-    if set(document) != {"schema_version", *path_fields} or document.get(
-        "schema_version"
-    ) != "1.0.0":
+    if (
+        set(document) != {"schema_version", *path_fields}
+        or document.get("schema_version") != "1.0.0"
+    ):
         raise AuthorizationDenied("MEASUREMENT_CYCLE_PLAN_INVALID")
     paths = {field: _path(document.get(field)) for field in path_fields}
     for field in (
@@ -163,9 +164,10 @@ def load_bootstrap_traces(
         document = _mapping(load_strict_document(path), "BOOTSTRAP_SOURCE_INVALID")
     except ConfigurationError as exc:
         raise AuthorizationDenied("BOOTSTRAP_SOURCE_INVALID") from exc
-    if set(document) != {"schema_version", "captured_at", "traces"} or document.get(
-        "schema_version"
-    ) != "1.0.0":
+    if (
+        set(document) != {"schema_version", "captured_at", "traces"}
+        or document.get("schema_version") != "1.0.0"
+    ):
         raise AuthorizationDenied("BOOTSTRAP_SOURCE_INVALID")
     captured_at = _time(document.get("captured_at"))
     age = now.astimezone(UTC) - captured_at
@@ -345,9 +347,7 @@ def run_measurement_cycle_once(
             forbidden_repository_root=Path("/opt/ai-quant"),
         )
         dsn = host_measurement_database_dsn(credential)
-        factory = connection_factory or (
-            lambda value: psycopg.connect(value, row_factory=dict_row)
-        )
+        factory = connection_factory or (lambda value: psycopg.connect(value, row_factory=dict_row))
         with factory(dsn) as connection:
             measurements = _collect_cycle(
                 plan,

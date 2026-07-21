@@ -1,0 +1,39 @@
+[Unit]
+Description=AI Quant hourly Codex production copy-system audit
+After=network-online.target aiq-copy-migrations.service
+Wants=network-online.target
+Requires=aiq-copy-migrations.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+StartLimitIntervalSec=3600
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+UMask=0077
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_codex_audit --environment PRODUCTION --database-url-file /run/ai-quant-secrets/copy-business-database-url --repository-root /root/quantify/ai-quant-system --schema-file contracts/copy-system-audit.schema.json --work-root /var/lib/ai-quant/codex/copy-audit --evidence-file /var/lib/ai-quant/evidence/copy-trading/audit/latest.json
+TimeoutStartSec=1200
+Restart=on-failure
+RestartSec=300
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/root/.codex /var/lib/ai-quant/codex /var/lib/ai-quant/evidence/copy-trading /run/systemd
+InaccessiblePaths=/root/aiq-user-inputs -/run/ai-quant-production-secrets /run/ai-quant-secrets/copy-production-arm.json /run/ai-quant-secrets/copy-telegram-bot-token /run/ai-quant-secrets/copy-telegram-chat-ids /run/ai-quant-secrets/copy-telegram-authorized-user-ids

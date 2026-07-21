@@ -105,9 +105,10 @@ def _validate_metadata(document: dict[str, Any], receipt_id: str) -> None:
         raise ValueError("unsupported encryption format")
     if document["inspection_type"] != "PARQUET":
         raise ValueError("unsupported inspection type")
-    if not isinstance(document["expected_parquet_schema_version"], str) or not document[
-        "expected_parquet_schema_version"
-    ]:
+    if (
+        not isinstance(document["expected_parquet_schema_version"], str)
+        or not document["expected_parquet_schema_version"]
+    ):
         raise ValueError("invalid expected Parquet schema version")
     _utc_timestamp(document["uploaded_at"])
 

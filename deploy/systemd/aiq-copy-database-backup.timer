@@ -1,0 +1,11 @@
+[Unit]
+Description=Run verified copy-trading database backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=aiq-copy-database-backup.service
+
+[Install]
+WantedBy=timers.target

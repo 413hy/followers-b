@@ -96,9 +96,7 @@ def test_rate_service_assembles_only_fixed_file_and_database_boundaries(
     with pytest.raises(RuntimeError, match="stop test service"):
         rate_budget.run()
 
-    assert observed["password_path"] == Path(
-        "/run/secrets/rate_authority_db_password"
-    )
+    assert observed["password_path"] == Path("/run/secrets/rate_authority_db_password")
     assert observed["forbidden_root"] == Path("/app")
     assert observed["dsn"] == "fixed-dsn-for-fixture-value"
     assert observed["instance_id"] == "rate-allocator-01"

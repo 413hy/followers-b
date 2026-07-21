@@ -84,9 +84,7 @@ def observe_live_network_state(
     container_documents: object = []
     network_documents: object = []
     if container_ids:
-        container_documents = _json_output(
-            runner(("/usr/bin/docker", "inspect", *container_ids))
-        )
+        container_documents = _json_output(runner(("/usr/bin/docker", "inspect", *container_ids)))
     if network_ids:
         network_documents = _json_output(
             runner(("/usr/bin/docker", "network", "inspect", *network_ids))
@@ -140,12 +138,7 @@ def _network_modes(network_documents: object) -> Mapping[str, bool]:
         network = _mapping(raw_network)
         name = network.get("Name")
         internal = network.get("Internal")
-        if (
-            not isinstance(name, str)
-            or not name
-            or not isinstance(internal, bool)
-            or name in modes
-        ):
+        if not isinstance(name, str) or not name or not isinstance(internal, bool) or name in modes:
             raise AuthorizationDenied("NETWORK_MEASUREMENT_INVALID")
         modes[name] = internal
     if not modes:
@@ -172,9 +165,7 @@ def _container_facts(document: object) -> Mapping[str, Any]:
     labels = _string_mapping(config.get("Labels"))
     state = _mapping(container.get("State"))
     network_settings = _mapping(container.get("NetworkSettings"))
-    attached_networks = frozenset(
-        _string_mapping(network_settings.get("Networks")).keys()
-    )
+    attached_networks = frozenset(_string_mapping(network_settings.get("Networks")).keys())
     mounts = _sequence(container.get("Mounts", []))
     mount_destinations: set[str] = set()
     for raw_mount in mounts:
@@ -270,9 +261,7 @@ def measure_network_boundary(
 
     environment_keys = gateway["environment_keys"]
     mount_destinations = gateway["mount_destinations"]
-    if not isinstance(environment_keys, frozenset) or not isinstance(
-        mount_destinations, frozenset
-    ):
+    if not isinstance(environment_keys, frozenset) or not isinstance(mount_destinations, frozenset):
         raise AuthorizationDenied("NETWORK_MEASUREMENT_INVALID")
     secret_markers = ("SECRET", "API_KEY", "PRIVATE_KEY")
     gateway_has_api_secret = any(

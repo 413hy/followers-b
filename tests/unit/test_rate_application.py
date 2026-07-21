@@ -50,9 +50,7 @@ class FakeAuthority:
 
 
 def _example(name: str) -> dict[str, Any]:
-    value: object = json.loads(
-        (ROOT / "contracts/examples" / name).read_text(encoding="utf-8")
-    )
+    value: object = json.loads((ROOT / "contracts/examples" / name).read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
 
@@ -65,9 +63,7 @@ def _application() -> tuple[RateBudgetApplication, FakeAuthority, Any]:
         expected_keyring_hash=keyring_hash,
         now=NOW,
     )
-    not_applicable = CostRule(
-        mode="NOT_APPLICABLE", fixed_cost=0, parameter_name=None, tiers=()
-    )
+    not_applicable = CostRule(mode="NOT_APPLICABLE", fixed_cost=0, parameter_name=None, tiers=())
     endpoint = EndpointPolicy(
         endpoint_id="REST_NEW_ALGO_ORDER",
         authority="BINANCE_PRODUCTION_FAPI",
@@ -77,9 +73,7 @@ def _application() -> tuple[RateBudgetApplication, FakeAuthority, Any]:
         market_stream_role=None,
         control_frame_type=None,
         allowed_operation_classes=frozenset({"PROTECTION_CREATE_REPLACE"}),
-        causal_role_class_map={
-            "PROTECTION_CREATE_REPLACE": "PROTECTION_CREATE_REPLACE"
-        },
+        causal_role_class_map={"PROTECTION_CREATE_REPLACE": "PROTECTION_CREATE_REPLACE"},
         request_weight_rule=CostRule(mode="FIXED", fixed_cost=1, parameter_name=None, tiers=()),
         order_count_rule=not_applicable,
         websocket_control_rule=not_applicable,

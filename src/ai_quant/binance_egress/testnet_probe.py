@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,9 @@ from ai_quant.common.private_files import read_private_file
 TESTNET_REST_BASE = "https://demo-fapi.binance.com"
 TESTNET_STREAM_HOST = "demo-fstream.binance.com"
 TESTNET_WS_API_HOST = "testnet.binancefuture.com"
+PRODUCTION_REST_BASE = "https://fapi.binance.com"
+PRODUCTION_STREAM_HOST = "fstream.binance.com"
+PRODUCTION_WS_API_HOST = "ws-fapi.binance.com"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
@@ -41,6 +45,33 @@ class HttpResult:
 
 Transport = Callable[[str, str, Mapping[str, str], bytes | None], HttpResult]
 WebSocketProbe = Callable[[str, str], None]
+
+
+class BinanceFuturesEnvironment(StrEnum):
+    TESTNET = "TESTNET"
+    PRODUCTION = "PRODUCTION"
+
+
+@dataclass(frozen=True, slots=True)
+class BinanceFuturesEndpointProfile:
+    environment: BinanceFuturesEnvironment
+    rest_base: str
+    stream_host: str
+    websocket_api_host: str
+
+
+TESTNET_ENDPOINTS = BinanceFuturesEndpointProfile(
+    environment=BinanceFuturesEnvironment.TESTNET,
+    rest_base=TESTNET_REST_BASE,
+    stream_host=TESTNET_STREAM_HOST,
+    websocket_api_host=TESTNET_WS_API_HOST,
+)
+PRODUCTION_ENDPOINTS = BinanceFuturesEndpointProfile(
+    environment=BinanceFuturesEnvironment.PRODUCTION,
+    rest_base=PRODUCTION_REST_BASE,
+    stream_host=PRODUCTION_STREAM_HOST,
+    websocket_api_host=PRODUCTION_WS_API_HOST,
+)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -73,6 +104,33 @@ def _urllib_transport(
         return HttpResult(exc.code, dict(exc.headers.items()), payload)
     except (OSError, TimeoutError, urllib.error.URLError) as exc:
         raise TestnetProbeError("TESTNET_TRANSPORT_FAILED") from exc
+
+
+def _production_urllib_transport(
+    method: str,
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes | None,
+) -> HttpResult:
+    if not url.startswith(f"{PRODUCTION_REST_BASE}/fapi/"):
+        raise TestnetProbeError("PRODUCTION_DESTINATION_DENIED")
+    request = urllib.request.Request(  # noqa: S310 -- exact HTTPS origin checked above
+        url, data=body, headers=dict(headers), method=method
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=10) as response:
+            payload = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(payload) > MAX_RESPONSE_BYTES:
+                raise TestnetProbeError("PRODUCTION_RESPONSE_TOO_LARGE")
+            return HttpResult(response.status, dict(response.headers.items()), payload)
+    except urllib.error.HTTPError as exc:
+        payload = exc.read(MAX_RESPONSE_BYTES + 1)
+        if len(payload) > MAX_RESPONSE_BYTES:
+            raise TestnetProbeError("PRODUCTION_RESPONSE_TOO_LARGE") from exc
+        return HttpResult(exc.code, dict(exc.headers.items()), payload)
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise TestnetProbeError("PRODUCTION_TRANSPORT_FAILED") from exc
 
 
 def websocket_upgrade(host: str, path: str) -> None:
@@ -167,6 +225,8 @@ class BinanceTestnetClient:
         self._transport = transport
         self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
         self._server_offset_ms = 0
+        self._endpoint_profile = TESTNET_ENDPOINTS
+        self._user_agent = "aiq-copy-testnet/1"
 
     def _call(
         self,
@@ -189,10 +249,10 @@ class BinanceTestnetClient:
                 self._api_secret, query.encode("ascii"), hashlib.sha256
             ).hexdigest()
             query = f"{query}&signature={signature}"
-        url = f"{TESTNET_REST_BASE}{path}"
+        url = f"{self._endpoint_profile.rest_base}{path}"
         if query:
             url = f"{url}?{query}"
-        headers = {"Accept": "application/json", "User-Agent": "aiq-testnet-probe/1"}
+        headers = {"Accept": "application/json", "User-Agent": self._user_agent}
         if signed or api_key_required:
             headers["X-MBX-APIKEY"] = self._api_key
         return self._transport(method, url, headers, b"" if method in {"POST", "PUT"} else None)
@@ -255,6 +315,29 @@ class BinanceTestnetClient:
             "POSITION_MODE",
         )
 
+    def change_position_mode(self, *, hedge_mode: bool) -> dict[str, Any]:
+        return _json_object(
+            self._call(
+                "POST",
+                "/fapi/v1/positionSide/dual",
+                params={"dualSidePosition": "true" if hedge_mode else "false"},
+                signed=True,
+            ),
+            "CHANGE_POSITION_MODE",
+        )
+
+    def account_information(self) -> dict[str, Any]:
+        return _json_object(
+            self._call("GET", "/fapi/v3/account", signed=True),
+            "ACCOUNT_INFORMATION",
+        )
+
+    def account_information_v2(self) -> dict[str, Any]:
+        return _json_object(
+            self._call("GET", "/fapi/v2/account", signed=True),
+            "ACCOUNT_INFORMATION_V2",
+        )
+
     def symbol_config(self, symbol: str) -> list[dict[str, Any]]:
         return _json_list(
             self._call("GET", "/fapi/v1/symbolConfig", params={"symbol": symbol}, signed=True),
@@ -280,9 +363,7 @@ class BinanceTestnetClient:
 
     def commission_rate(self, symbol: str) -> dict[str, Any]:
         return _json_object(
-            self._call(
-                "GET", "/fapi/v1/commissionRate", params={"symbol": symbol}, signed=True
-            ),
+            self._call("GET", "/fapi/v1/commissionRate", params={"symbol": symbol}, signed=True),
             "COMMISSION_RATE",
         )
 
@@ -303,6 +384,12 @@ class BinanceTestnetClient:
         return _json_list(
             self._call("GET", "/fapi/v1/openOrders", params={"symbol": symbol}, signed=True),
             "OPEN_ORDERS",
+        )
+
+    def all_open_orders(self) -> list[dict[str, Any]]:
+        return _json_list(
+            self._call("GET", "/fapi/v1/openOrders", signed=True),
+            "ALL_OPEN_ORDERS",
         )
 
     def position_risk(self, symbol: str) -> list[dict[str, Any]]:
@@ -434,11 +521,30 @@ class BinanceTestnetClient:
 
     def open_algo_orders(self, symbol: str) -> list[dict[str, Any]]:
         return _json_list(
-            self._call(
-                "GET", "/fapi/v1/openAlgoOrders", params={"symbol": symbol}, signed=True
-            ),
+            self._call("GET", "/fapi/v1/openAlgoOrders", params={"symbol": symbol}, signed=True),
             "OPEN_ALGO_ORDERS",
         )
+
+
+class BinanceProductionClient(BinanceTestnetClient):
+    """Exact-origin production client; construction is gated by the service layer."""
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        transport: Transport = _production_urllib_transport,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> None:
+        super().__init__(
+            api_key,
+            api_secret,
+            transport=transport,
+            clock_ms=clock_ms,
+        )
+        self._endpoint_profile = PRODUCTION_ENDPOINTS
+        self._user_agent = "aiq-copy-production/1"
 
 
 def _decimal_step(value: Decimal, step: Decimal, rounding: str) -> Decimal:
@@ -462,9 +568,7 @@ def _order_test_parameters(
     filters = symbol_info.get("filters")
     if not isinstance(filters, list):
         raise TestnetProbeError("TEST_SYMBOL_FILTERS_INVALID")
-    by_type = {
-        item.get("filterType"): item for item in filters if isinstance(item, dict)
-    }
+    by_type = {item.get("filterType"): item for item in filters if isinstance(item, dict)}
     try:
         tick_size = Decimal(str(by_type["PRICE_FILTER"]["tickSize"]))
         lot = by_type["LOT_SIZE"]
@@ -530,6 +634,29 @@ def _minimum_market_quantity(
             _decimal_step(minimum_notional / ask_price, step_size, ROUND_CEILING),
         )
     return quantity
+
+
+def hedge_test_order_parameters(
+    exchange_info: Mapping[str, Any],
+    book_ticker: Mapping[str, Any],
+    symbol: str,
+) -> dict[str, str]:
+    """Build a hedge-mode MARKET request for Binance's non-executing order test endpoint."""
+    try:
+        ask_price = Decimal(str(book_ticker["askPrice"]))
+    except (KeyError, ArithmeticError) as error:
+        raise TestnetProbeError("TEST_BOOK_TICKER_INVALID") from error
+    if not ask_price.is_finite() or ask_price <= 0:
+        raise TestnetProbeError("TEST_BOOK_TICKER_INVALID")
+    quantity = _minimum_market_quantity(exchange_info, symbol, ask_price)
+    return {
+        "symbol": symbol,
+        "side": "BUY",
+        "positionSide": "LONG",
+        "type": "MARKET",
+        "quantity": format(quantity, "f"),
+        "newClientOrderId": f"aq-h-probe-{secrets.token_hex(6)}",
+    }
 
 
 def _position_quantity(client: BinanceTestnetClient, symbol: str) -> Decimal:
@@ -703,9 +830,7 @@ def run_safe_testnet_probe(
     if margin_types and margin_types != {"CROSSED"}:
         raise TestnetProbeError("ACCOUNT_MARGIN_MODE_NOT_CROSSED")
     non_flat = [
-        item
-        for item in positions
-        if Decimal(str(item.get("positionAmt", "0"))) != Decimal("0")
+        item for item in positions if Decimal(str(item.get("positionAmt", "0"))) != Decimal("0")
     ]
     if open_orders or non_flat:
         raise TestnetProbeError("TESTNET_ACCOUNT_NOT_CLEAN")
@@ -905,9 +1030,7 @@ def run_testnet_order_lifecycle(
     open_orders = client.open_orders(symbol)
     positions = client.position_risk(symbol)
     non_flat = [
-        item
-        for item in positions
-        if Decimal(str(item.get("positionAmt", "0"))) != Decimal("0")
+        item for item in positions if Decimal(str(item.get("positionAmt", "0"))) != Decimal("0")
     ]
     if open_orders or non_flat:
         raise TestnetProbeError("TESTNET_CLEANUP_NOT_FLAT")
@@ -1035,9 +1158,7 @@ def run_testnet_native_protection(
         )
         if queried_algo.get("algoStatus") != "NEW":
             raise TestnetProbeError("PROTECTION_QUERY_NOT_NEW")
-        take_profit_trigger = _decimal_step(
-            mark_price * Decimal("1.05"), tick_size, ROUND_CEILING
-        )
+        take_profit_trigger = _decimal_step(mark_price * Decimal("1.05"), tick_size, ROUND_CEILING)
         take_profit_document = client.place_algo_order(
             {
                 "algoType": "CONDITIONAL",

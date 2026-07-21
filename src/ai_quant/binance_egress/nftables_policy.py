@@ -71,9 +71,9 @@ def render_nftables_policy(document: Mapping[str, Any]) -> str:
     raw_binance_ipv6 = document.get("binance_ipv6")
     if not isinstance(raw_business_ipv6, list) or not isinstance(raw_binance_ipv6, list):
         raise AuthorizationDenied("NFT_POLICY_INVALID")
-    if bool(raw_business_ipv6) != bool(raw_binance_ipv6) or bool(
-        raw_gateway_ipv6
-    ) != bool(raw_binance_ipv6):
+    if bool(raw_business_ipv6) != bool(raw_binance_ipv6) or bool(raw_gateway_ipv6) != bool(
+        raw_binance_ipv6
+    ):
         raise AuthorizationDenied("NFT_POLICY_IPV6_COVERAGE_INVALID")
     gateway_ipv6: str | None = None
     business_ipv6: tuple[str, ...] = ()

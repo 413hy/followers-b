@@ -32,9 +32,7 @@ def test_72h_gate_passes_only_one_immutable_clean_release() -> None:
 
 def test_release_change_and_protection_gap_restart_gate() -> None:
     observations = [observation(hour) for hour in range(73)]
-    observations[10] = observation(
-        10, release_hash="b" * 64, unprotected_positions=1
-    )
+    observations[10] = observation(10, release_hash="b" * 64, unprotected_positions=1)
     result = evaluate_continuous_gate(
         observations,
         required_duration=timedelta(hours=72),

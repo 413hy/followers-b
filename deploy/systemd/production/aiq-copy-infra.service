@@ -1,0 +1,31 @@
+[Unit]
+Description=AI Quant production copy-trading PostgreSQL infrastructure
+After=docker.service aiq-copy-secrets.service
+Requires=docker.service aiq-copy-secrets.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+Environment=COPY_BUSINESS_DB_PASSWORD_FILE=/run/ai-quant-secrets/copy-business-db-password
+ExecStart=/usr/bin/docker compose -f deploy/copy-trading-production-infra.compose.yaml up -d --wait --wait-timeout 120
+ExecReload=/usr/bin/docker compose -f deploy/copy-trading-production-infra.compose.yaml up -d --wait --wait-timeout 120
+RemainAfterExit=yes
+TimeoutStartSec=180
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

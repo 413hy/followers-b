@@ -160,8 +160,7 @@ class PostgresRateAuthority:
                 )
                 rows = list(cursor.fetchall())
                 observed = {
-                    (str(row["endpoint_authority"]), str(row["endpoint_id"])): row
-                    for row in rows
+                    (str(row["endpoint_authority"]), str(row["endpoint_id"])): row for row in rows
                 }
                 if set(observed) != set(catalog.endpoints):
                     raise _DatabaseInvariantError
@@ -368,9 +367,7 @@ class PostgresRateAuthority:
         self,
         catalog: RuntimeEndpointCatalog,
         trust_bundle: RuntimeTrustBundle,
-        class_cost_vectors: Mapping[
-            tuple[str, str], Mapping[str, tuple[RuntimeCost, ...]]
-        ],
+        class_cost_vectors: Mapping[tuple[str, str], Mapping[str, tuple[RuntimeCost, ...]]],
     ) -> None:
         """Atomically persist verified endpoint contracts plus runtime scoped ceilings."""
         if set(class_cost_vectors) != set(catalog.endpoints):
@@ -406,10 +403,8 @@ class PostgresRateAuthority:
                 for service, acl in trust_bundle.callers.items()
                 if endpoint.authority in acl.allowed_endpoint_authorities
                 and any(
-                    endpoint.authority
-                    in trust_bundle.issuers[issuer].allowed_endpoint_authorities
-                    and operation_class
-                    in trust_bundle.issuers[issuer].allowed_operation_classes
+                    endpoint.authority in trust_bundle.issuers[issuer].allowed_endpoint_authorities
+                    and operation_class in trust_bundle.issuers[issuer].allowed_operation_classes
                     for issuer in acl.allowed_issuers
                     for operation_class in endpoint.allowed_operation_classes
                 )
@@ -604,9 +599,7 @@ class PostgresRateAuthority:
             "gateway_derived_parameter_hash": request["gateway_derived_parameter_hash"],
             "gateway_derived_wire_bytes_hash": request["gateway_derived_wire_bytes_hash"],
             "gateway_request_document_hash": request["gateway_request_document_hash"],
-            "gateway_derived_operation_facts_hash": request[
-                "gateway_derived_operation_facts_hash"
-            ],
+            "gateway_derived_operation_facts_hash": request["gateway_derived_operation_facts_hash"],
             "causal_capability_payload_hash": request["causal_capability_payload_hash"],
             "capability_nonce_state": "CONSUMED" if granted else None,
             "fencing_epoch": request["expected_fencing_epoch"],

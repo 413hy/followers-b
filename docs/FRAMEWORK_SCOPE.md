@@ -2,8 +2,10 @@
 
 ## Purpose
 
-Provide reusable, tested trading infrastructure and a strategy-agnostic automatic execution engine
-without embedding a concrete trading strategy or enabling an unattended trader by default.
+Provide reusable, tested trading infrastructure and a strategy-agnostic automatic execution engine.
+The repository now also contains a project-owned copy-trading consumer. That consumer follows
+explicit public lead-trader operation deltas; it does not add a built-in predictive strategy to the
+base framework.
 
 ## Authority boundary
 
@@ -26,10 +28,11 @@ decide a symbol, direction or entry time without a new project-owned decision mo
 
 ## Removed authority
 
-The repository has no old strategy campaign, strategy-owned Testnet executor, strategy dashboard,
-strategy result reviewer, strategy replay sweep or executable strategy core. The generic automatic
-engine is retained, while deployment contains no enabled automatic-trading unit until a new project
-provides its decision, gate and execution adapters.
+The repository has no old V4/V5 predictive strategy campaign, result reviewer, replay sweep or
+executable strategy core. The generic automatic engine remains reusable. The separate
+`ai_quant.copy_trading` project is an explicit decision consumer with its own Testnet executor,
+Telegram dashboard, deployment units and tests; it must not be described as part of the empty
+`ai_quant.strategy` extension package.
 
 ## Adding a new project
 

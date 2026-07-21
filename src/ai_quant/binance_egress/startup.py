@@ -62,9 +62,7 @@ def startup_measurement_hash(content: Mapping[str, Any]) -> str:
     """Hash every measured fact while excluding only issuance metadata."""
     if any(field not in content for field in _MEASUREMENT_BINDING_FIELDS):
         raise AuthorizationDenied("STARTUP_EVIDENCE_BINDING_MISMATCH")
-    return canonical_digest(
-        {field: content[field] for field in _MEASUREMENT_BINDING_FIELDS}
-    ).hex()
+    return canonical_digest({field: content[field] for field in _MEASUREMENT_BINDING_FIELDS}).hex()
 
 
 def load_attestation_private_key(
@@ -150,13 +148,10 @@ def verify_startup_evidence(
     expires_at = _time(content.get("expires_at"))
     if (
         not issued_at <= verified.signed_at <= utc_now < expires_at
-        or expires_at - issued_at
-        > timedelta(seconds=signer.max_evidence_ttl_seconds)
+        or expires_at - issued_at > timedelta(seconds=signer.max_evidence_ttl_seconds)
         or content.get("stage") != expectation.stage
-        or frozenset(content.get("enabled_environments", ()))
-        != expectation.enabled_environments
-        or frozenset(content.get("enabled_authorities", ()))
-        != expectation.enabled_authorities
+        or frozenset(content.get("enabled_environments", ())) != expectation.enabled_environments
+        or frozenset(content.get("enabled_authorities", ())) != expectation.enabled_authorities
         or content.get("host_boot_id") != expectation.host_boot_id
         or content.get("artifact_binding") != expectation.artifact_binding
         or content.get("release_binding") != expectation.release_binding
@@ -166,8 +161,7 @@ def verify_startup_evidence(
     database = content.get("database_authority")
     if not isinstance(database, Mapping) or (
         database.get("fencing_epoch") != expectation.fencing_epoch
-        or database.get("fencing_owner_instance_id")
-        != expectation.fencing_owner_instance_id
+        or database.get("fencing_owner_instance_id") != expectation.fencing_owner_instance_id
     ):
         raise AuthorizationDenied("STARTUP_EVIDENCE_BINDING_MISMATCH")
     observations = content.get("authority_observations")
@@ -179,9 +173,7 @@ def verify_startup_evidence(
         != set(expectation.enabled_authorities)
     ):
         raise AuthorizationDenied("STARTUP_EVIDENCE_OBSERVATIONS_INVALID")
-    observation_floor = issued_at - timedelta(
-        seconds=signer.max_evidence_ttl_seconds
-    )
+    observation_floor = issued_at - timedelta(seconds=signer.max_evidence_ttl_seconds)
     if any(
         not observation_floor <= _time(item.get("observed_at")) <= issued_at
         for item in observations
@@ -288,9 +280,7 @@ def publish_startup_evidence(
         raise AuthorizationDenied("STARTUP_EVIDENCE_PUBLISH_UNSAFE")
     schema = json.loads(evidence_schema_path.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
-    if list(
-        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(document)
-    ):
+    if list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(document)):
         raise AuthorizationDenied("STARTUP_EVIDENCE_SCHEMA_INVALID")
     verify_startup_evidence(
         document,
@@ -298,13 +288,16 @@ def publish_startup_evidence(
         expectation=expectation,
         now=now,
     )
-    encoded = json.dumps(
-        document,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8") + b"\n"
+    encoded = (
+        json.dumps(
+            document,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
     temporary = parent / f".{output_path.name}.{uuid.uuid4().hex}.tmp"
     descriptor = -1
     try:

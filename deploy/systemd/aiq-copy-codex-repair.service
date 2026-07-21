@@ -1,0 +1,37 @@
+[Unit]
+Description=AI Quant bounded Codex automatic repair
+After=network-online.target aiq-copy-codex-audit.service aiq-copy-migrations.service
+Wants=network-online.target
+Requires=aiq-copy-migrations.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+StartLimitIntervalSec=3600
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+UMask=0077
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_codex_repair --repository-root /root/quantify/ai-quant-system --schema-file contracts/copy-system-repair.schema.json --request-file /var/lib/ai-quant/evidence/copy-trading/audit/repair-request.json --work-root /var/lib/ai-quant/codex/copy-repair --evidence-file /var/lib/ai-quant/evidence/copy-trading/repair/latest.json
+ExecStartPost=/usr/bin/systemctl start --no-block aiq-copy-codex-repair-finalize.service
+TimeoutStartSec=1800
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=no
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/root/.codex /root/quantify/ai-quant-system/src /root/quantify/ai-quant-system/tests /root/quantify/ai-quant-system/docs /var/lib/ai-quant/codex /var/lib/ai-quant/evidence/copy-trading /run/systemd
+InaccessiblePaths=/run/ai-quant-secrets -/run/ai-quant-production-secrets /root/aiq-user-inputs

@@ -64,10 +64,8 @@ def _validate_trace(trace: Mapping[str, Any]) -> Mapping[str, str]:
             "ServerTimeObservation",
             "ExchangeRateLimitObservation",
         }
-        or reserve_decision.get("request_message_id")
-        != reserve_request.get("message_id")
-        or consume_decision.get("request_message_id")
-        != consume_request.get("message_id")
+        or reserve_decision.get("request_message_id") != reserve_request.get("message_id")
+        or consume_decision.get("request_message_id") != consume_request.get("message_id")
     ):
         raise AuthorizationDenied("BOOTSTRAP_MEASUREMENT_CAUSAL_MISMATCH")
     permit_documents = (
@@ -117,10 +115,7 @@ def _validate_trace(trace: Mapping[str, Any]) -> Mapping[str, str]:
             or gateway_request.get(field) != expected
             or consume_request.get(consume_field) != expected
             or consume_decision.get(consume_field) != expected
-            or (
-                field == "canonical_request_hash"
-                and send_outcome.get(field) != expected
-            )
+            or (field == "canonical_request_hash" and send_outcome.get(field) != expected)
         ):
             raise AuthorizationDenied("BOOTSTRAP_MEASUREMENT_CAUSAL_MISMATCH")
     return {

@@ -62,9 +62,7 @@ _RELEASE_HASH_FIELDS = frozenset(
         "gateway_config_hash",
     }
 )
-_RELEASE_IMAGE_FIELDS = frozenset(
-    {"rate_allocator_image_digest", "gateway_image_digest"}
-)
+_RELEASE_IMAGE_FIELDS = frozenset({"rate_allocator_image_digest", "gateway_image_digest"})
 _DYNAMIC_FACT_FIELDS = frozenset(
     {
         "database_authority",
@@ -195,8 +193,7 @@ def load_local_facts_plan(
         or not all(isinstance(value, str) for value in peer_acl_hashes.values())
         or not all(isinstance(name, str) for name in peer_acl_hashes)
         or any(
-            len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
             for value in peer_acl_hashes.values()
         )
     ):
@@ -223,9 +220,7 @@ def load_local_facts_plan(
             approved_artifact_roots=tuple(_absolute_path(root) for root in roots),
             socket_sources=_path_mapping(plan.get("socket_sources")),
             peer_acl_hashes=dict(peer_acl_hashes),
-            release_image_digest_sources=_path_mapping(
-                plan.get("release_image_digest_sources")
-            ),
+            release_image_digest_sources=_path_mapping(plan.get("release_image_digest_sources")),
             dynamic_fact_sources=_path_mapping(plan.get("dynamic_fact_sources")),
         ),
     )
@@ -302,17 +297,19 @@ def _load_dynamic_facts(
         if before != after:
             raise AuthorizationDenied("LOCAL_MEASUREMENT_SOURCE_CHANGED")
         source = _mapping(document)
-        if set(source) != {
-            "schema_version",
-            "captured_at",
-            "measurement_hash",
-            "measurement",
-        } or source.get("schema_version") != "1.0.0":
+        if (
+            set(source)
+            != {
+                "schema_version",
+                "captured_at",
+                "measurement_hash",
+                "measurement",
+            }
+            or source.get("schema_version") != "1.0.0"
+        ):
             raise AuthorizationDenied("LOCAL_DYNAMIC_FACT_INVALID")
         captured_at = _time(source.get("captured_at"))
-        if not timedelta(0) <= utc_now - captured_at <= timedelta(
-            seconds=maximum_age_seconds
-        ):
+        if not timedelta(0) <= utc_now - captured_at <= timedelta(seconds=maximum_age_seconds):
             raise AuthorizationDenied("LOCAL_DYNAMIC_FACT_STALE")
         captured_times.add(captured_at)
         measurement = source.get("measurement")
@@ -472,13 +469,16 @@ def _publish_root_document(
         or output_path.is_symlink()
     ):
         raise AuthorizationDenied("LOCAL_FACTS_PUBLISH_UNSAFE")
-    encoded = json.dumps(
-        document,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8") + b"\n"
+    encoded = (
+        json.dumps(
+            document,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
     temporary = parent / f".{output_path.name}.{uuid.uuid4().hex}.tmp"
     descriptor = -1
     try:
@@ -541,9 +541,7 @@ def publish_root_dynamic_measurement(
         raise AuthorizationDenied("LOCAL_DYNAMIC_FACT_INVALID") from exc
     document: Mapping[str, Any] = {
         "schema_version": "1.0.0",
-        "captured_at": captured_at.astimezone(UTC)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "captured_at": captured_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "measurement_hash": measurement_hash,
         "measurement": measurement,
     }
@@ -609,9 +607,7 @@ def collect_and_publish_local_facts(
             approved_roots=expectation.approved_artifact_roots,
         )
     )
-    release_binding.update(
-        _read_release_image_digests(expectation.release_image_digest_sources)
-    )
+    release_binding.update(_read_release_image_digests(expectation.release_image_digest_sources))
     facts: dict[str, Any] = {
         "captured_at": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "stage": expectation.stage,
@@ -676,9 +672,10 @@ def assemble_startup_content_from_local_facts(
     except ConfigurationError as exc:
         raise AuthorizationDenied("LOCAL_FACTS_INVALID") from exc
     outer = _mapping(document)
-    if set(outer) != {"schema_version", "facts_hash", "facts"} or outer.get(
-        "schema_version"
-    ) != "1.0.0":
+    if (
+        set(outer) != {"schema_version", "facts_hash", "facts"}
+        or outer.get("schema_version") != "1.0.0"
+    ):
         raise AuthorizationDenied("LOCAL_FACTS_INVALID")
     facts = _mapping(outer.get("facts"))
     if set(facts) != _MEASURED_FIELDS | {"captured_at"}:
@@ -688,16 +685,12 @@ def assemble_startup_content_from_local_facts(
 
     utc_now = now.astimezone(UTC)
     captured_at = _time(facts.get("captured_at"))
-    if not timedelta(0) <= utc_now - captured_at <= timedelta(
-        seconds=maximum_facts_age_seconds
-    ):
+    if not timedelta(0) <= utc_now - captured_at <= timedelta(seconds=maximum_facts_age_seconds):
         raise AuthorizationDenied("LOCAL_FACTS_STALE")
     if (
         facts.get("stage") != expectation.stage
-        or frozenset(facts.get("enabled_environments", ()))
-        != expectation.enabled_environments
-        or frozenset(facts.get("enabled_authorities", ()))
-        != expectation.enabled_authorities
+        or frozenset(facts.get("enabled_environments", ())) != expectation.enabled_environments
+        or frozenset(facts.get("enabled_authorities", ())) != expectation.enabled_authorities
         or facts.get("host_boot_id") != _host_boot_id(expectation.host_boot_id_path)
     ):
         raise AuthorizationDenied("LOCAL_FACTS_BINDING_MISMATCH")
@@ -709,9 +702,7 @@ def assemble_startup_content_from_local_facts(
         approved_roots=expectation.approved_artifact_roots,
     )
     release_binding = _mapping(facts.get("release_binding"))
-    release_hashes = {
-        name: str(release_binding.get(name)) for name in expectation.release_sources
-    }
+    release_hashes = {name: str(release_binding.get(name)) for name in expectation.release_sources}
     verify_artifact_bindings(
         release_hashes,
         expectation.release_sources,
@@ -744,9 +735,7 @@ def assemble_startup_content_from_local_facts(
         "evidence_id": evidence_id,
         "evidence_status": "SIGNED_READY",
         "issued_at": utc_now.isoformat().replace("+00:00", "Z"),
-        "expires_at": (utc_now + timedelta(seconds=ttl_seconds))
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "expires_at": (utc_now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z"),
     }
     content.update({field: facts[field] for field in _MEASURED_FIELDS})
     startup_expectation = StartupEvidenceExpectation(

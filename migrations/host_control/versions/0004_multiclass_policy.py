@@ -365,9 +365,7 @@ def downgrade() -> None:
         "char,char,char,char,char,char,varchar,bigint,timestamptz"
     )
     op.execute(f"DROP FUNCTION rate_control.reserve_permit_v2({signature})")
-    op.execute(
-        f"DROP FUNCTION rate_control.reserve_permit_v2_under_active_lease({signature})"
-    )
+    op.execute(f"DROP FUNCTION rate_control.reserve_permit_v2_under_active_lease({signature})")
     op.execute("ALTER TABLE rate_control.permits DROP COLUMN gateway_connection_id")
     op.execute(
         "ALTER TABLE rate_control.endpoint_runtime_policies "

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Codex copy-system audit hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=aiq-copy-codex-audit.service
+
+[Install]
+WantedBy=timers.target

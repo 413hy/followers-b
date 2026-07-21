@@ -94,11 +94,14 @@ def estimate_gross_edge(
     shrinkage_strength_observations: int,
 ) -> GrossEdgeEstimate:
     """Resolve an exact cell and its first adequate frozen hierarchy parent."""
-    if min(
-        minimum_cell_observations,
-        minimum_parent_observations,
-        shrinkage_strength_observations,
-    ) < 1:
+    if (
+        min(
+            minimum_cell_observations,
+            minimum_parent_observations,
+            shrinkage_strength_observations,
+        )
+        < 1
+    ):
         raise ValueError("gross-edge observation thresholds must be positive")
     by_identity: dict[tuple[str | None, ...], GrossEdgeCell] = {}
     for cell in cells:

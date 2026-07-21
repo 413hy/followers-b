@@ -1,0 +1,30 @@
+name: aiq-copy-production
+
+services:
+  postgres:
+    image: docker.io/timescale/timescaledb@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    environment:
+      POSTGRES_DB: aiq_copy_production
+      POSTGRES_USER: aiq_copy_production
+      POSTGRES_PASSWORD_FILE: /run/secrets/business_db_password
+    secrets: [business_db_password]
+    ports: ["127.0.0.1:55433:5432"]
+    volumes: [copy_production_pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp, /var/run/postgresql]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiq_copy_production -d aiq_copy_production"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  copy_production_pgdata:
+
+secrets:
+  business_db_password:
+    file: ${COPY_BUSINESS_DB_PASSWORD_FILE:-/run/ai-quant-secrets/copy-business-db-password}

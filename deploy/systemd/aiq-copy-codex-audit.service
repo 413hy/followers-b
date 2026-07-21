@@ -1,0 +1,41 @@
+[Unit]
+Description=AI Quant hourly Codex copy-system audit
+After=network-online.target aiq-copy-migrations.service
+Wants=network-online.target
+Requires=aiq-copy-migrations.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+StartLimitIntervalSec=3600
+# Hourly, event-driven incident, repair-finalization, and authorized Telegram audits
+# share this read-only unit. Keep a bounded but sufficiently high activation budget.
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+UMask=0077
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_codex_audit --environment TESTNET --database-url-file /run/ai-quant-secrets/copy-business-database-url --repository-root /root/quantify/ai-quant-system --schema-file contracts/copy-system-audit.schema.json --work-root /var/lib/ai-quant/codex/copy-audit --evidence-file /var/lib/ai-quant/evidence/copy-trading/audit/latest.json
+TimeoutStartSec=1200
+Restart=on-failure
+RestartSec=300
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/root/.codex /var/lib/ai-quant/codex /var/lib/ai-quant/evidence/copy-trading /run/systemd
+InaccessiblePaths=/root/aiq-user-inputs -/run/ai-quant-production-secrets /run/ai-quant-secrets/binance-testnet-api-key /run/ai-quant-secrets/binance-testnet-api-secret /run/ai-quant-secrets/copy-telegram-bot-token /run/ai-quant-secrets/copy-telegram-chat-ids /run/ai-quant-secrets/copy-telegram-authorized-user-ids

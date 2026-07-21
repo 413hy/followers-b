@@ -69,8 +69,7 @@ def test_attestation_private_key_is_granted_only_to_its_fixed_holder() -> None:
         name: service.get("secrets", [])
         for name, service in document["services"].items()
         if any(
-            (grant.get("source") if isinstance(grant, dict) else grant)
-            == "host_attestation_key"
+            (grant.get("source") if isinstance(grant, dict) else grant) == "host_attestation_key"
             for grant in service.get("secrets", [])
         )
     }
@@ -110,9 +109,7 @@ def test_host_database_bootstrap_secret_is_not_exposed_to_rate_service() -> None
         )
     }
     assert consumers == {"host-control-postgres"}
-    rate_environment = document["services"]["rate-budget-service"].get(
-        "environment", {}
-    )
+    rate_environment = document["services"]["rate-budget-service"].get("environment", {})
     assert "AIQ_HOST_CONTROL_DB_PASSWORD_FILE" not in rate_environment
 
 
@@ -122,10 +119,7 @@ def test_attestation_evidence_has_one_writer_and_one_read_only_consumer() -> Non
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         for name, service in document.get("services", {}).items():
             for mount in service.get("volumes", []):
-                if (
-                    isinstance(mount, dict)
-                    and mount.get("source") == "/run/ai-quant-attestation"
-                ):
+                if isinstance(mount, dict) and mount.get("source") == "/run/ai-quant-attestation":
                     assert mount.get("target") == "/run/ai-quant-attestation"
                     mounts[name] = bool(mount.get("read_only", False))
     assert mounts == {
@@ -140,10 +134,7 @@ def test_trust_root_is_read_only_and_not_exposed_to_business_services() -> None:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         for name, service in document.get("services", {}).items():
             for mount in service.get("volumes", []):
-                if (
-                    isinstance(mount, dict)
-                    and mount.get("source") == "/etc/ai-quant/trust"
-                ):
+                if isinstance(mount, dict) and mount.get("source") == "/etc/ai-quant/trust":
                     assert mount.get("target") == "/etc/ai-quant/trust"
                     mounts[name] = bool(mount.get("read_only", False))
     assert mounts == {

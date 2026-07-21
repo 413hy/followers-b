@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="aiq-m0-migrations-$$"
+APP_IMAGE="aiq-app:migration-test-$$"
 TMP="$(mktemp -d /tmp/aiq-m0-migrations.XXXXXX)"
 COMPOSE=(docker compose -p "$RUN_ID" -f "$ROOT/deploy/compose.test.yaml")
 
@@ -10,6 +11,7 @@ cleanup() {
   TEST_BUSINESS_DB_PASSWORD_FILE="$TMP/business" \
   TEST_HOST_DB_PASSWORD_FILE="$TMP/host" \
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker image rm "$APP_IMAGE" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -21,6 +23,9 @@ BUSINESS_PASSWORD="$(<"$TMP/business")"
 HOST_PASSWORD="$(<"$TMP/host")"
 export TEST_BUSINESS_DB_PASSWORD_FILE="$TMP/business"
 export TEST_HOST_DB_PASSWORD_FILE="$TMP/host"
+
+docker build --pull=false --provenance=false \
+  -f "$ROOT/docker/app.Dockerfile" -t "$APP_IMAGE" "$ROOT"
 
 "${COMPOSE[@]}" up -d --wait business-postgres host-postgres redis
 
@@ -36,13 +41,20 @@ run_business_migration() {
   docker run --rm --network "${RUN_ID}_test_db_net" \
     --mount "type=bind,src=$TMP/business-dsn,dst=/run/secrets/business-dsn,readonly" \
     -e AIQ_BUSINESS_DATABASE_URL_FILE=/run/secrets/business-dsn \
-    aiq-app:m0 alembic -c migrations/business/alembic.ini "$@"
+    "$APP_IMAGE" alembic -c migrations/business/alembic.ini "$@"
 }
 run_host_migration() {
   docker run --rm --network "${RUN_ID}_test_db_net" \
     --mount "type=bind,src=$TMP/host-dsn,dst=/run/secrets/host-dsn,readonly" \
     -e AIQ_HOST_CONTROL_DATABASE_URL_FILE=/run/secrets/host-dsn \
-    aiq-app:m0 alembic -c migrations/host_control/alembic.ini "$@"
+    "$APP_IMAGE" alembic -c migrations/host_control/alembic.ini "$@"
+}
+run_copy_repository_tests() {
+  docker run --rm --network "${RUN_ID}_test_db_net" \
+    --mount "type=bind,src=$TMP/business-dsn,dst=/run/secrets/business-dsn,readonly" \
+    --mount "type=bind,src=$ROOT/scripts/test-copy-repository-postgres.py,dst=/tmp/test-copy-repository-postgres.py,readonly" \
+    "$APP_IMAGE" python /tmp/test-copy-repository-postgres.py \
+      --database-url-file /run/secrets/business-dsn
 }
 
 run_business_migration upgrade head
@@ -53,6 +65,8 @@ run_business_migration upgrade head
 run_host_migration upgrade head
 
 printf 'migration round-trip PASS\n'
+
+run_copy_repository_tests
 
 docker exec "${RUN_ID}-business-postgres-1" psql -U aiq_business_test -d aiq_business_test -Atc \
   "SELECT state || ':' || new_entries_allowed FROM control.runtime_state" | grep -qx 'RISK_LOCKED:false'

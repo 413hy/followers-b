@@ -107,8 +107,7 @@ def _signed_documents(
                 "retrieved_at": "2026-07-13T00:00:00Z",
                 "artifact_path": "source.txt",
                 "canonicalization": (
-                    "UTF8_LF_NORMALIZED_VISIBLE_DOCUMENT_TEXT_WITH_URI_AND_"
-                    "RETRIEVED_AT_SIDECAR"
+                    "UTF8_LF_NORMALIZED_VISIBLE_DOCUMENT_TEXT_WITH_URI_AND_RETRIEVED_AT_SIDECAR"
                 ),
                 "sha256": source_hash,
             }

@@ -67,9 +67,7 @@ def test_only_exact_signed_remote_receipt_verifies(tmp_path: object) -> None:
     )
     signed = unsigned.model_copy(
         update={
-            "signature_base64": base64.b64encode(
-                signer.sign(unsigned.signing_bytes())
-            ).decode()
+            "signature_base64": base64.b64encode(signer.sign(unsigned.signing_bytes())).decode()
         }
     )
 

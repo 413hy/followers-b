@@ -70,24 +70,16 @@ def main() -> int:
                 failures.append(f"{path.name}:{name}: privileged/host network forbidden")
             if name == "host-attestation-signer" and (
                 service.get("command") != LOCKED_ATTESTATION_COMMAND
-                or service.get("environment", {}).get("AIQ_RUNTIME_STATE")
-                != "RISK_LOCKED"
+                or service.get("environment", {}).get("AIQ_RUNTIME_STATE") != "RISK_LOCKED"
             ):
-                failures.append(
-                    f"{path.name}:{name}: issuer activation requires deployment gates"
-                )
+                failures.append(f"{path.name}:{name}: issuer activation requires deployment gates")
             mounts = service.get("volumes", [])
             if any("docker.sock" in str(mount) for mount in mounts):
                 failures.append(f"{path.name}:{name}: Docker socket mount forbidden")
             for mount in mounts:
-                if (
-                    isinstance(mount, dict)
-                    and mount.get("source") == "/run/ai-quant-attestation"
-                ):
+                if isinstance(mount, dict) and mount.get("source") == "/run/ai-quant-attestation":
                     if mount.get("target") != "/run/ai-quant-attestation":
-                        failures.append(
-                            f"{path.name}:{name}: attestation mount target invalid"
-                        )
+                        failures.append(f"{path.name}:{name}: attestation mount target invalid")
                     attestation_evidence_mounts[name] = bool(mount.get("read_only", False))
                 if isinstance(mount, dict) and mount.get("source") == "/etc/ai-quant/trust":
                     if mount.get("target") != "/etc/ai-quant/trust":
@@ -112,13 +104,9 @@ def main() -> int:
             if expected_identity is not None:
                 fixed_identity_services.add(name)
                 if service.get("user") != expected_identity:
-                    failures.append(
-                        f"{path.name}:{name}: user must be {expected_identity}"
-                    )
+                    failures.append(f"{path.name}:{name}: user must be {expected_identity}")
                 if service.get("group_add") != FIXED_SUPPLEMENTARY_GROUPS[name]:
-                    failures.append(
-                        f"{path.name}:{name}: supplementary socket groups invalid"
-                    )
+                    failures.append(f"{path.name}:{name}: supplementary socket groups invalid")
         text = path.read_text(encoding="utf-8").lower()
         if "binance_api_secret" in text or "openai_api_key:" in text:
             failures.append(f"{path.name}: direct secret variable forbidden")
@@ -126,9 +114,7 @@ def main() -> int:
         failures.append(f"expected exactly one gateway definition, found {gateway_count}")
     missing_identities = set(FIXED_IDENTITIES) - fixed_identity_services
     if missing_identities:
-        failures.append(
-            "fixed-identity services absent: " + ",".join(sorted(missing_identities))
-        )
+        failures.append("fixed-identity services absent: " + ",".join(sorted(missing_identities)))
     if production_secret_consumers != ["execution-service"]:
         failures.append(
             "production Binance secret consumers must be exactly execution-service, got "
@@ -160,8 +146,7 @@ def main() -> int:
     }
     if trust_root_mounts != expected_trust_mounts:
         failures.append(
-            "trust root mounts must be read-only host-control consumers, got "
-            f"{trust_root_mounts}"
+            f"trust root mounts must be read-only host-control consumers, got {trust_root_mounts}"
         )
     if failures:
         print("\n".join(failures))

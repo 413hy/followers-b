@@ -18,9 +18,7 @@ from ai_quant.automation import (
 
 
 class AllowGate:
-    def evaluate(
-        self, intent: AutomaticTradeIntent, snapshot: AutomationSnapshot
-    ) -> GateDecision:
+    def evaluate(self, intent: AutomaticTradeIntent, snapshot: AutomationSnapshot) -> GateDecision:
         return GateDecision(True)
 
 
@@ -28,9 +26,7 @@ class RecordingExecutor:
     def __init__(self) -> None:
         self.ids: list[str] = []
 
-    def submit_with_native_protection(
-        self, intent: AutomaticTradeIntent
-    ) -> ExecutionReceipt:
+    def submit_with_native_protection(self, intent: AutomaticTradeIntent) -> ExecutionReceipt:
         self.ids.append(intent.intent_id)
         return ExecutionReceipt(True, f"order-{intent.intent_id}")
 
