@@ -31,11 +31,23 @@ class PostgresSubmissionJournal:
             with self._connect() as connection, connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT signal_id,client_order_id,request_hash,
-                           request_hash_version,requested_quantity,leverage,
-                           order_type,limit_price,expires_at,claimed_at
-                      FROM copytrading.submission_claims
-                     WHERE signal_id=%s
+                    SELECT claim.signal_id,
+                           coalesce(upgrade.client_order_id,claim.client_order_id)
+                             AS client_order_id,
+                           claim.request_hash,
+                           CASE WHEN upgrade.signal_id IS NULL
+                                THEN claim.request_hash_version ELSE 1 END
+                             AS request_hash_version,
+                           claim.requested_quantity,claim.leverage,
+                           claim.order_type,claim.limit_price,
+                           CASE WHEN upgrade.signal_id IS NULL
+                                THEN claim.expires_at ELSE NULL END AS expires_at,
+                           coalesce(upgrade.occurred_at,claim.claimed_at) AS claimed_at,
+                           upgrade.signal_id IS NOT NULL AS policy_upgraded
+                      FROM copytrading.submission_claims AS claim
+                      LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade
+                        USING(signal_id)
+                     WHERE claim.signal_id=%s
                     """,
                     (signal_id,),
                 )
@@ -59,6 +71,7 @@ class PostgresSubmissionJournal:
             limit_price=(None if row["limit_price"] is None else Decimal(str(row["limit_price"]))),
             expires_at=row["expires_at"],
             claimed_at=row["claimed_at"],
+            policy_upgraded=bool(row["policy_upgraded"]),
         )
 
     def claim(

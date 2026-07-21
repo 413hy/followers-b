@@ -307,6 +307,18 @@ def test_business_migration_revision_ids_fit_alembic_version_column() -> None:
         assert len(revision) <= 32, f"{path.name}: {revision}"
 
 
+def test_persistent_protected_entry_migration_allows_gtc_claims() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations/business/versions/0028_persistent_protected_entries.py"
+    ).read_text(encoding="utf-8")
+
+    assert "(order_type='LIMIT' AND limit_price>0)" in migration
+    assert 'down_revision = "0027_pnl_reset_baseline"' in migration
+    assert "submission_policy_upgrade_events" in migration
+    assert "reject_append_only_mutation" in migration
+
+
 def test_copy_pnl_migration_has_account_and_per_leader_append_only_ledgers() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (root / "migrations/business/versions/0011_copy_account_valuations.py").read_text()

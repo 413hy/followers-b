@@ -2292,6 +2292,82 @@ class CopyTradingRepository:
             )
         )
 
+    def source_position_quantity_before(self, signal: NormalizedSignal) -> Decimal | None:
+        """Return tracked public source exposure immediately before one source signal.
+
+        This ledger follows every durable public increase/reduction even when the local
+        protected limit did not fill.  Control reductions have no public source position
+        and intentionally return ``None`` so they retain full-local-close semantics.
+        """
+
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH latest_reset AS (
+                      SELECT occurred_at
+                        FROM copytrading.source_resolution_reset_events
+                       WHERE lead_portfolio_id=%s
+                       ORDER BY occurred_at DESC,reset_event_id DESC LIMIT 1
+                    ), current_source AS (
+                      SELECT persisted.signal_origin,source.update_time_ms,source.event_key,
+                             source.observed_at
+                        FROM copytrading.signals AS persisted
+                        LEFT JOIN copytrading.source_fill_delta_events AS delta
+                          ON delta.delta_event_id=persisted.delta_event_id
+                        LEFT JOIN copytrading.source_order_events AS source
+                          ON source.event_key=delta.source_event_key
+                       WHERE persisted.signal_id=%s
+                    )
+                    SELECT current_source.signal_origin,
+                           greatest(
+                             coalesce(sum(
+                               CASE historical.signal_kind
+                                 WHEN 'INCREASE' THEN historical.source_delta_quantity
+                                 ELSE -historical.source_delta_quantity
+                               END
+                             ),0),
+                             0
+                           ) AS source_quantity
+                      FROM current_source
+                      LEFT JOIN copytrading.source_order_events AS source
+                        ON current_source.signal_origin='PUBLIC'
+                       AND source.lead_portfolio_id=%s
+                       AND source.symbol=%s
+                       AND source.position_side=%s
+                       AND source.observed_at>coalesce(
+                         (SELECT occurred_at FROM latest_reset),'-infinity'::timestamptz
+                       )
+                       AND current_source.observed_at>coalesce(
+                         (SELECT occurred_at FROM latest_reset),'-infinity'::timestamptz
+                       )
+                       AND (source.update_time_ms,source.event_key)
+                           < (current_source.update_time_ms,current_source.event_key)
+                      LEFT JOIN copytrading.source_fill_delta_events AS delta
+                        ON delta.source_event_key=source.event_key
+                      LEFT JOIN copytrading.signals AS historical
+                        ON historical.delta_event_id=delta.delta_event_id
+                       AND historical.signal_origin='PUBLIC'
+                     GROUP BY current_source.signal_origin
+                    """,
+                    (
+                        signal.lead_portfolio_id,
+                        signal.signal_id,
+                        signal.lead_portfolio_id,
+                        signal.symbol,
+                        signal.position_side.value,
+                    ),
+                )
+                row = cursor.fetchone()
+        except psycopg.Error as error:
+            raise CopyRepositoryError("COPY_SOURCE_POSITION_READ_FAILED") from error
+        if row is None or str(row["signal_origin"]) != "PUBLIC":
+            return None
+        quantity = Decimal(str(row["source_quantity"]))
+        if not quantity.is_finite() or quantity < 0:
+            raise CopyRepositoryError("COPY_SOURCE_POSITION_INVALID")
+        return quantity
+
     def attributed_fill_quantity(self, signal_id: str) -> Decimal | None:
         """Return an already committed local fill for crash-safe decision recovery.
 
@@ -2635,7 +2711,9 @@ class CopyTradingRepository:
                 cursor.execute(
                     """
                     SELECT persisted_signal.signal_origin,
-                           claim.order_type,claim.limit_price,claim.expires_at,
+                           claim.order_type,claim.limit_price,
+                           CASE WHEN upgrade.signal_id IS NULL
+                                THEN claim.expires_at ELSE NULL END AS expires_at,
                            claim.requested_quantity,claim.leverage,
                            pnl.fill_price,pnl.resulting_average_entry_price,
                            pnl.realized_pnl_delta_usdt,
@@ -2643,6 +2721,8 @@ class CopyTradingRepository:
                              AS leader_realized_pnl_delta
                       FROM copytrading.signals AS persisted_signal
                       LEFT JOIN copytrading.submission_claims AS claim USING(signal_id)
+                      LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade
+                        USING(signal_id)
                       LEFT JOIN copytrading.leader_pnl_events AS pnl USING(signal_id)
                       LEFT JOIN copytrading.source_fill_delta_events AS delta
                         ON delta.delta_event_id=persisted_signal.delta_event_id

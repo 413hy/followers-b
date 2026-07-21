@@ -1,4 +1,4 @@
-"""Long-running 30-second copy-trading poller."""
+"""Long-running 10-second copy-trading poller."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--testnet-arm-file", type=Path)
     parser.add_argument("--production-arm-file", type=Path)
-    parser.add_argument("--interval-seconds", type=int, default=30)
+    parser.add_argument("--interval-seconds", type=int, default=10)
     return parser.parse_args()
 
 

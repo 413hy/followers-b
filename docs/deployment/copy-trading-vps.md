@@ -196,7 +196,7 @@ systemctl start aiq-copy-long-leader-selector.service
 systemctl start aiq-copy-leader-selector.service
 ```
 
-这两个任务会读取公开候选数据并调用 Codex，可能持续数分钟。完成后等待至少一个 30 秒轮询周期，
+这两个任务会读取公开候选数据并调用 Codex，可能持续数分钟。完成后等待至少一个 10 秒轮询周期，
 在 Telegram 中检查带单员、仓位、待入场和系统状态。最后使用授权用户的“恢复新开仓”二次确认操作，
 不要通过直改数据库跳过该门禁。
 
@@ -226,7 +226,7 @@ journalctl -u aiq-copy-watchdog.service -n 30 --no-pager
 合格状态应当包括：
 
 - Alembic 只有一个 head，且数据库已在该 head。
-- 每个 30 秒周期的带单员轮询成功，没有持续失败。
+- 每个 10 秒周期的带单员轮询成功，没有持续失败。
 - Telegram 能显示 Testnet 环境，并且只接受授权 User ID 的写操作。
 - Watchdog 为 `HEALTHY` 且无关键 finding。
 - `systemctl --failed` 无与 `aiq-copy-*` 相关的失败单元。
@@ -263,13 +263,25 @@ git fetch origin
 git pull --ff-only origin main
 uv sync --frozen --all-groups
 uv run pytest -q
+systemctl stop aiq-copy-poller.service
 systemctl restart aiq-copy-migrations.service
-systemctl restart aiq-copy-poller.service aiq-copy-telegram.service
+uv run python scripts/upgrade-pending-protected-orders.py \
+  --database-url-file /run/ai-quant-secrets/copy-business-database-url \
+  --api-key-file /run/ai-quant-secrets/binance-testnet-api-key \
+  --api-secret-file /run/ai-quant-secrets/binance-testnet-api-secret \
+  --repository-root /root/quantify/ai-quant-system
+install -m 0644 deploy/systemd/aiq-copy-poller.service \
+  /etc/systemd/system/aiq-copy-poller.service
+systemctl daemon-reload
+systemctl start aiq-copy-poller.service
+systemctl restart aiq-copy-telegram.service
 systemctl start aiq-copy-watchdog.service
 ```
 
 `aiq-copy-migrations.service` 在重启时会暂停其依赖服务，这是 systemd 依赖关系的正常现象。升级后必须再次
-检查 poller、Telegram 和 Watchdog。
+检查 poller、Telegram 和 Watchdog。`upgrade-pending-protected-orders.py` 只处理升级前仍处于
+`SUBMITTED/UNCERTAIN` 且尚未成交的旧 GTD 入场单：它在 poller 停止期间等量换成 GTC，并追加不可修改
+的升级证据；全新安装或没有旧挂单时会安全报告 `replaced: 0`。
 
 ## 12. 常见故障
 

@@ -60,9 +60,8 @@ class CopyMarketOrder:
             raise ValueError("copy protected limit is only valid for entries")
         if self.limit_price is None or not self.limit_price.is_finite() or self.limit_price <= 0:
             raise ValueError("copy protected limit price is invalid")
-        if self.expires_at is None:
-            raise ValueError("copy protected limit expiry is required")
-        _require_utc(self.expires_at)
+        if self.expires_at is not None:
+            _require_utc(self.expires_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,21 +101,35 @@ class SubmissionClaim:
     expires_at: datetime | None = None
     request_hash_version: int = 2
     claimed_at: datetime | None = None
+    policy_upgraded: bool = False
 
     def restored_order(self, signal: NormalizedSignal) -> CopyMarketOrder | None:
+        allowed_client_order_ids = {
+            copy_client_order_id(
+                signal.signal_id,
+                environment=BinanceFuturesEnvironment.TESTNET,
+            ),
+            copy_client_order_id(
+                signal.signal_id,
+                environment=BinanceFuturesEnvironment.PRODUCTION,
+            ),
+        }
+        if self.policy_upgraded:
+            allowed_client_order_ids.update(
+                {
+                    copy_gtc_upgrade_client_order_id(
+                        signal.signal_id,
+                        environment=BinanceFuturesEnvironment.TESTNET,
+                    ),
+                    copy_gtc_upgrade_client_order_id(
+                        signal.signal_id,
+                        environment=BinanceFuturesEnvironment.PRODUCTION,
+                    ),
+                }
+            )
         if (
             self.signal_id != signal.signal_id
-            or self.client_order_id
-            not in {
-                copy_client_order_id(
-                    signal.signal_id,
-                    environment=BinanceFuturesEnvironment.TESTNET,
-                ),
-                copy_client_order_id(
-                    signal.signal_id,
-                    environment=BinanceFuturesEnvironment.PRODUCTION,
-                ),
-            }
+            or self.client_order_id not in allowed_client_order_ids
             or self.requested_quantity is None
             or self.leverage is None
         ):
@@ -763,17 +776,34 @@ def copy_client_order_id(
     return f"{prefix}-{signal_id[:28]}"
 
 
+def copy_gtc_upgrade_client_order_id(
+    signal_id: str,
+    *,
+    environment: BinanceFuturesEnvironment = BinanceFuturesEnvironment.TESTNET,
+) -> str:
+    """Return the deterministic replacement ID for a pre-0028 pending GTD claim."""
+    if len(signal_id) != 64 or any(character not in "0123456789abcdef" for character in signal_id):
+        raise ValueError("copy signal ID must be a lowercase SHA-256 digest")
+    prefix = {
+        BinanceFuturesEnvironment.TESTNET: "aqg-t",
+        BinanceFuturesEnvironment.PRODUCTION: "aqg-p",
+    }.get(environment)
+    if prefix is None:
+        raise ValueError("copy execution environment is invalid")
+    return f"{prefix}-{signal_id[:28]}"
+
+
 def protected_entry_price(
     signal: NormalizedSignal,
     price_tick: Decimal,
     *,
     market_price: Decimal | None = None,
 ) -> Decimal:
-    """Return a no-worse limit, using the live book when it is more favorable.
+    """Return the tick-safe source limit used as the worst acceptable entry price.
 
-    A far-away source limit can violate Binance's dynamic percent-price band even
-    when it is marketable. In that case the matching engine would have filled at
-    the better live price, but the gateway rejects the raw limit before matching.
+    ``market_price`` remains accepted for API compatibility but does not replace the
+    leader's boundary. A marketable LIMIT already receives the current better price
+    from the matching engine, while a worse market leaves the source-price order open.
     """
     if signal.kind is not SignalKind.INCREASE:
         raise ValueError("copy protected price requires an increase signal")
@@ -785,19 +815,8 @@ def protected_entry_price(
         price += price_tick
     if price <= 0:
         raise ValueError("copy protected price is below one exchange tick")
-    if market_price is None:
-        return price
-    if not market_price.is_finite() or market_price <= 0:
+    if market_price is not None and (not market_price.is_finite() or market_price <= 0):
         raise ValueError("copy protected market price is invalid")
-    market_steps = market_price // price_tick
-    market_limit = market_steps * price_tick
-    if exchange_order_side(signal) == "BUY":
-        if market_limit < market_price:
-            market_limit += price_tick
-        if market_limit <= price:
-            return market_limit
-    elif market_limit >= price:
-        return market_limit
     return price
 
 
@@ -812,11 +831,14 @@ def _order_parameters(order: CopyMarketOrder, client_order_id: str) -> dict[str,
         "newClientOrderId": client_order_id,
     }
     if order.order_type is CopyOrderType.LIMIT:
-        if order.limit_price is None or order.expires_at is None:
+        if order.limit_price is None:
             raise ValueError("copy protected limit policy is missing")
         parameters["price"] = _decimal_parameter(order.limit_price)
-        parameters["timeInForce"] = "GTD"
-        parameters["goodTillDate"] = str(int(order.expires_at.timestamp()) * 1000)
+        if order.expires_at is None:
+            parameters["timeInForce"] = "GTC"
+        else:
+            parameters["timeInForce"] = "GTD"
+            parameters["goodTillDate"] = str(int(order.expires_at.timestamp()) * 1000)
     return parameters
 
 
@@ -833,8 +855,8 @@ def _decimal_parameter(value: Decimal) -> str:
 def _request_hash(order: CopyMarketOrder, client_order_id: str) -> str:
     parameters = _order_parameters(order, client_order_id)
     if order.expires_at is None:
-        # Preserve compatibility with durable MARKET claims created before
-        # protected limit execution was introduced.
+        # Preserve compatibility with durable MARKET claims and include GTC in the
+        # exchange parameters for persistent protected LIMIT claims.
         return _payload_hash(parameters)
     return _payload_hash(
         {

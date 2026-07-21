@@ -15,6 +15,7 @@ from ai_quant.copy_trading.execution import (
     SubmissionEvent,
     _request_hash,
     copy_client_order_id,
+    copy_gtc_upgrade_client_order_id,
     protected_entry_price,
 )
 from ai_quant.copy_trading.models import NormalizedSignal, PositionSide, SignalKind
@@ -190,6 +191,17 @@ def _protected_order(
     )
 
 
+def _persistent_protected_order() -> CopyMarketOrder:
+    return CopyMarketOrder(
+        _signal(),
+        local_quantity=Decimal("0.010"),
+        leverage=10,
+        order_type=CopyOrderType.LIMIT,
+        limit_price=Decimal("2000"),
+        expires_at=None,
+    )
+
+
 def test_account_risk_warning_is_advisory_by_default() -> None:
     warning = _snapshot(margin="115")
     entry = evaluate_account_risk(warning, signal_kind=SignalKind.INCREASE, now=NOW)
@@ -266,17 +278,17 @@ def test_protected_entry_price_never_rounds_to_a_worse_source_price() -> None:
     ) == Decimal("2000.02")
 
 
-def test_protected_entry_price_uses_live_quote_when_market_is_better() -> None:
+def test_protected_entry_keeps_source_boundary_when_live_quote_is_better() -> None:
     assert protected_entry_price(
         _signal(side=PositionSide.LONG, reference_price="0.1659499"),
         Decimal("0.00001"),
         market_price=Decimal("0.154321"),
-    ) == Decimal("0.15433")
+    ) == Decimal("0.16594")
     assert protected_entry_price(
         _signal(side=PositionSide.SHORT, reference_price="90.451"),
         Decimal("0.01"),
         market_price=Decimal("94.729"),
-    ) == Decimal("94.72")
+    ) == Decimal("90.46")
 
 
 def test_protected_entry_price_keeps_source_limit_when_market_is_worse() -> None:
@@ -324,6 +336,34 @@ def test_entry_uses_gtd_protected_limit_with_durable_expiry() -> None:
     )
     assert journal.existing is not None
     assert journal.existing.expires_at == NOW + timedelta(hours=1)
+
+
+def test_persistent_protected_limit_uses_gtc_without_an_expiry() -> None:
+    client = FakeClient()
+    journal = FakeJournal()
+
+    def acknowledge(params: dict[str, str]) -> dict[str, Any]:
+        client.placed.append(params)
+        return {
+            "clientOrderId": params["newClientOrderId"],
+            "orderId": 126,
+            "status": "NEW",
+            "executedQty": "0",
+            "avgPrice": "0",
+        }
+
+    client.place_order = acknowledge  # type: ignore[method-assign]
+    receipt = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW,
+    ).execute(_persistent_protected_order(), risk_decision=_risk())
+
+    assert receipt.state is CopyExecutionState.ACKNOWLEDGED
+    assert client.placed[0]["timeInForce"] == "GTC"
+    assert "goodTillDate" not in client.placed[0]
+    assert journal.existing is not None
+    assert journal.existing.expires_at is None
 
 
 def test_expired_protected_entry_is_cancelled_without_market_conversion() -> None:
@@ -751,6 +791,25 @@ def test_durable_claim_restores_result_response_mode() -> None:
         expires_at=order.expires_at,
         request_hash_version=2,
         claimed_at=NOW,
+    )
+
+    assert claim.restored_order(order.signal) == order
+
+
+def test_upgraded_legacy_claim_restores_persistent_replacement_order() -> None:
+    order = _persistent_protected_order()
+    claim = SubmissionClaim(
+        signal_id=order.signal.signal_id,
+        client_order_id=copy_gtc_upgrade_client_order_id(order.signal.signal_id),
+        request_hash="0" * 64,
+        requested_quantity=order.local_quantity,
+        leverage=order.leverage,
+        order_type=order.order_type,
+        limit_price=order.limit_price,
+        expires_at=None,
+        request_hash_version=1,
+        claimed_at=NOW,
+        policy_upgraded=True,
     )
 
     assert claim.restored_order(order.signal) == order

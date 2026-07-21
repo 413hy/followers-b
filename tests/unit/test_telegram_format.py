@@ -762,6 +762,34 @@ def test_submitted_entry_is_presented_as_a_distinct_trade_signal() -> None:
     assert "\n\n" not in text
 
 
+def test_persistent_entry_notification_has_no_clock_expiry() -> None:
+    text = _notification_text(
+        {
+            "event": "copy_signal_decision",
+            "state": "SUBMITTED",
+            "symbol": "BTCUSDT",
+            "position_side": "LONG",
+            "signal_kind": "INCREASE",
+            "local_quantity": "0.0008",
+            "lead_portfolio_id": "5014426348046646785",
+            "leader_nickname": "测试带单员",
+            "leader_reference_price": "63037.8",
+            "order_type": "LIMIT",
+            "limit_price": "63037.8",
+            "expires_at": None,
+            "requested_quantity": "0.0008",
+            "leverage": 10,
+            "system_fill_price": None,
+            "source_occurred_at": "2026-07-17T06:42:27+00:00",
+            "occurred_at": "2026-07-17T06:42:30+00:00",
+            "reason_codes": [],
+        }
+    )
+
+    assert "委托 63037.8" in text
+    assert "(至 " not in text
+
+
 def test_close_notification_includes_leader_and_system_realized_pnl() -> None:
     text = _notification_text(
         {

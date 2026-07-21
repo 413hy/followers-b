@@ -696,8 +696,11 @@ SELECT (SELECT count(*) FROM active) AS active_leaders,
          AS repeated_minimum_rejections,
        (SELECT count(*) FROM copytrading.submission_claims AS claim
          JOIN latest_decision AS decision USING(signal_id)
+         LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade USING(signal_id)
          WHERE claim.order_type='LIMIT'
            AND decision.state IN ('SUBMITTED','UNCERTAIN')
+           AND upgrade.signal_id IS NULL
+           AND claim.expires_at IS NOT NULL
            AND claim.expires_at<now()-interval '2 minutes')
          AS overdue_pending_entries,
        (SELECT count(*) FROM latest_replacement
@@ -762,10 +765,12 @@ SELECT signal.symbol,signal.position_side,
   FROM copytrading.submission_claims AS claim
   JOIN copytrading.signals AS signal USING(signal_id)
   JOIN latest_decision AS decision USING(signal_id)
+  LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade USING(signal_id)
  WHERE signal.signal_kind='INCREASE'
    AND claim.order_type='LIMIT'
    AND decision.state IN ('SUBMITTED','UNCERTAIN')
-   AND claim.expires_at>now()-interval '2 minutes'
+   AND (upgrade.signal_id IS NOT NULL OR claim.expires_at IS NULL
+        OR claim.expires_at>now()-interval '2 minutes')
  GROUP BY signal.symbol,signal.position_side
 """
 

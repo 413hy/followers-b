@@ -29,8 +29,7 @@ from ai_quant.copy_trading.execution import (
     HedgeTestnetMarketExecutor,
     protected_entry_price,
 )
-from ai_quant.copy_trading.leader_slots import LeaderSlot
-from ai_quant.copy_trading.ledger import ReductionPlan, exchange_order_side
+from ai_quant.copy_trading.ledger import ReductionPlan
 from ai_quant.copy_trading.models import (
     LeaderLifecycle,
     NormalizedSignal,
@@ -51,7 +50,7 @@ from ai_quant.copy_trading.risk import CopyAccountSnapshot, evaluate_account_ris
 _RECONCILIATION_GRACE_REASON_CODES = frozenset(
     {
         # A live LIMIT order may move through PARTIALLY_FILLED between two
-        # 30-second recovery passes.  The deterministic client order ID makes this
+        # recovery passes.  The deterministic client order ID makes this
         # state recoverable; the watchdog escalates it only after two minutes.
         "COPY_ORDER_PARTIAL_PENDING",
     }
@@ -67,8 +66,6 @@ class CopyRuntimeMode(StrEnum):
 
 class RuntimeExchangeClient(Protocol):
     def exchange_info(self) -> dict[str, Any]: ...
-
-    def book_ticker(self, symbol: str) -> dict[str, Any]: ...
 
     def position_mode(self) -> dict[str, Any]: ...
 
@@ -404,15 +401,13 @@ class CopyTradingRuntime:
                 return
         try:
             rules = self._symbol_rules(signal.symbol)
-            # Binance validates minimum notional and its dynamic price band against the actual
-            # submitted limit. Use the live opposing quote whenever it is no worse than the
-            # source fill; submitting a far-away marketable source limit can otherwise be
-            # rejected before it reaches the matching engine.
+            # The source fill is the owner-defined protection boundary. A marketable limit
+            # naturally fills at the current, better book price; when the book is worse the
+            # same order remains pending at the leader's price without chasing the market.
             entry_limit_price = (
                 protected_entry_price(
                     signal,
                     rules.price_tick,
-                    market_price=self._market_price(signal),
                 )
                 if signal.kind is SignalKind.INCREASE
                 else None
@@ -457,9 +452,19 @@ class CopyTradingRuntime:
                     reason_codes=risk.reason_codes,
                     occurred_at=now,
                 )
+        source_position_before = (
+            self._repository.source_position_quantity_before(signal)
+            if signal.kind is SignalKind.REDUCE
+            else None
+        )
+        source_position_closes = (
+            source_position_before is None
+            or signal.source_delta_quantity >= source_position_before
+        )
         if (
             self._execution_enabled
             and signal.kind is SignalKind.REDUCE
+            and source_position_closes
             and not self._cancel_superseded_entries(signal, now=now)
         ):
             self._record_decision(
@@ -527,10 +532,14 @@ class CopyTradingRuntime:
                 leverage=leverage,
                 order_type=CopyOrderType.LIMIT,
                 limit_price=entry_limit_price,
-                expires_at=now + _entry_timeout(assignment.slot),
+                expires_at=None,
             )
         else:
-            reduction_plan = ledger.plan_reduction(signal, rules=rules)
+            reduction_plan = ledger.plan_reduction(
+                signal,
+                rules=rules,
+                source_position_quantity=source_position_before,
+            )
             if not reduction_plan.approved:
                 self._record_decision(
                     signal,
@@ -540,6 +549,9 @@ class CopyTradingRuntime:
                     now,
                 )
                 return
+            # plan_reduction aligns the ledger's source-side denominator with the complete
+            # public source history. Keep that aligned value in the append-only position event.
+            previous = ledger.position_for(signal)
             local_quantity = reduction_plan.requested_local_quantity
             if claimed_order is None:
                 order_request = CopyMarketOrder(
@@ -955,20 +967,9 @@ class CopyTradingRuntime:
             return False
         for order in self._exchange.all_open_orders():
             client_order_id = order.get("clientOrderId")
-            if isinstance(client_order_id, str) and client_order_id.startswith("aqc-"):
+            if isinstance(client_order_id, str) and client_order_id.startswith(("aqc-", "aqg-")):
                 return False
         return True
-
-    def _market_price(self, signal: NormalizedSignal) -> Decimal:
-        ticker = self._exchange.book_ticker(signal.symbol)
-        field = "askPrice" if exchange_order_side(signal) == "BUY" else "bidPrice"
-        try:
-            price = Decimal(str(ticker[field]))
-        except (KeyError, InvalidOperation, TypeError, ValueError) as error:
-            raise RuntimeError("COPY_MARKET_PRICE_INVALID") from error
-        if not price.is_finite() or price <= 0:
-            raise RuntimeError("COPY_MARKET_PRICE_INVALID")
-        return price
 
     def _symbol_rules(self, symbol: str) -> SymbolTradingRules:
         if self._exchange_info is None:
@@ -1146,10 +1147,6 @@ def _fill_price_details_pending(receipt: CopyExecutionReceipt) -> bool:
 def _require_utc(value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
         raise ValueError("copy runtime time must be timezone-aware UTC")
-
-
-def _entry_timeout(slot: LeaderSlot | None) -> timedelta:
-    return timedelta(hours=24 if slot is LeaderSlot.LONG_TERM else 1)
 
 
 def _operator_flatten(control: RuntimeControl) -> bool:

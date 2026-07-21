@@ -265,6 +265,7 @@ class FakeRepository:
         self.replacement_reconcile_quantities: list[Decimal] = []
         self.control_events: list[tuple[RuntimeControlState, tuple[str, ...], bool]] = []
         self.ledger = VirtualPositionLedger()
+        self.source_positions_before: dict[str, Decimal] = {}
         self.retired_drained_leaders: list[datetime] = []
 
     def active_assignments(self) -> tuple[LeaderAssignment, ...]:
@@ -362,6 +363,9 @@ class FakeRepository:
 
     def load_virtual_ledger(self) -> VirtualPositionLedger:
         return self.ledger
+
+    def source_position_quantity_before(self, signal: NormalizedSignal) -> Decimal | None:
+        return self.source_positions_before.get(signal.signal_id)
 
     def attributed_fill_quantity(self, signal_id: str) -> Decimal | None:
         return self.attributed_fills.get(signal_id)
@@ -1142,7 +1146,7 @@ def test_terminal_reduction_without_price_or_pending_marker_fails_closed() -> No
     )
 
 
-def test_short_and_long_entries_receive_protected_limit_expiries() -> None:
+def test_short_and_long_entries_remain_pending_until_source_reduction() -> None:
     short_signal = _signal()
     short_repository = FakeRepository(
         assignments=(_assignment(),),
@@ -1154,7 +1158,7 @@ def test_short_and_long_entries_receive_protected_limit_expiries() -> None:
     short_order = short_executor.orders[0]
     assert short_order.order_type is CopyOrderType.LIMIT
     assert short_order.limit_price == short_signal.reference_price
-    assert short_order.expires_at == NOW.replace(hour=11)
+    assert short_order.expires_at is None
 
     long_signal = _signal()
     long_repository = FakeRepository(
@@ -1166,7 +1170,7 @@ def test_short_and_long_entries_receive_protected_limit_expiries() -> None:
 
     long_order = long_executor.orders[0]
     assert long_order.order_type is CopyOrderType.LIMIT
-    assert long_order.expires_at == NOW.replace(day=17)
+    assert long_order.expires_at is None
 
 
 def test_trade_signal_timestamp_precedes_immediate_fill_timestamp() -> None:
@@ -1203,6 +1207,7 @@ def test_source_reduction_cancels_unfilled_entry_and_does_not_create_position() 
         ingested=(reduction,),
         pending=(pending,),
     )
+    repository.source_positions_before[reduction.signal_id] = reduction.source_delta_quantity
     executor = FakeExecutor()
     executor.pending_receipt = CopyExecutionReceipt(
         signal_id=pending.signal_id,
@@ -1228,6 +1233,52 @@ def test_source_reduction_cancels_unfilled_entry_and_does_not_create_position() 
         ("COPY_REDUCTION_ORPHAN",),
     )
     assert executor.orders == []
+
+
+def test_runtime_uses_complete_source_exposure_for_partial_reduction_ratio() -> None:
+    opening = _signal()
+    reduction = replace(
+        _signal(kind=SignalKind.REDUCE),
+        source_delta_quantity=Decimal("0.575"),
+        source_cumulative_quantity=Decimal("0.575"),
+    )
+    repository = FakeRepository(assignments=(_assignment(),), ingested=(reduction,))
+    repository.ledger.record_increase_fill(
+        opening,
+        filled_local_quantity=Decimal("0.845"),
+        attributed_source_quantity=Decimal("1.192"),
+    )
+    repository.source_positions_before[reduction.signal_id] = Decimal("1.767")
+    executor = FakeExecutor()
+
+    _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert executor.orders[0].local_quantity == Decimal("0.274")
+    position = repository.ledger.position_for(reduction)
+    assert position.local_quantity == Decimal("0.571")
+    assert position.observed_source_quantity == Decimal("1.192")
+
+
+def test_runtime_full_source_exit_closes_system_recorded_leader_position() -> None:
+    opening = _signal()
+    reduction = replace(
+        _signal(kind=SignalKind.REDUCE),
+        source_delta_quantity=Decimal("1.192"),
+        source_cumulative_quantity=Decimal("1.192"),
+    )
+    repository = FakeRepository(assignments=(_assignment(),), ingested=(reduction,))
+    repository.ledger.record_increase_fill(
+        opening,
+        filled_local_quantity=Decimal("0.845"),
+        attributed_source_quantity=Decimal("0.107"),
+    )
+    repository.source_positions_before[reduction.signal_id] = Decimal("1.192")
+    executor = FakeExecutor()
+
+    _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert executor.orders[0].local_quantity == Decimal("0.845")
+    assert repository.ledger.position_for(reduction).local_quantity == Decimal("0")
 
 
 def test_reduction_after_unfilled_addition_closes_the_older_owned_position() -> None:
@@ -1442,7 +1493,7 @@ def test_entry_sizes_minimum_notional_at_submitted_limit_when_market_is_worse() 
     assert order.local_quantity * order.limit_price >= Decimal("20")
 
 
-def test_entry_submits_live_better_limit_instead_of_far_away_source_price() -> None:
+def test_entry_submits_source_limit_and_relies_on_exchange_for_better_fill() -> None:
     class BetterMarketExchange(FakeExchange):
         def book_ticker(self, symbol: str) -> dict[str, Any]:
             assert symbol == "ETHUSDT"
@@ -1455,8 +1506,32 @@ def test_entry_submits_live_better_limit_instead_of_far_away_source_price() -> N
     _runtime(repository, FakePublic(), executor, exchange=BetterMarketExchange()).run_cycle()
 
     order = executor.orders[0]
-    assert order.limit_price == Decimal("1800.01")
-    assert order.limit_price < signal.reference_price
+    assert order.limit_price == signal.reference_price
+
+
+def test_partial_source_reduction_keeps_persistent_entry_open() -> None:
+    pending = _signal()
+    reduction = replace(
+        _signal(kind=SignalKind.REDUCE),
+        source_delta_quantity=Decimal("0.4"),
+        source_cumulative_quantity=Decimal("0.4"),
+    )
+    repository = FakeRepository(
+        assignments=(_assignment(),),
+        ingested=(reduction,),
+        pending=(pending,),
+    )
+    repository.source_positions_before[reduction.signal_id] = Decimal("1")
+    executor = FakeExecutor()
+
+    _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert repository.pending == (pending,)
+    assert executor.cancel_reasons == []
+    assert repository.decisions[-1][1:] == (
+        "IGNORED_ORPHAN",
+        ("COPY_REDUCTION_ORPHAN",),
+    )
 
 
 def test_new_entry_uses_only_its_assigned_leader_multiplier() -> None:

@@ -2205,7 +2205,7 @@ class PostgresTelegramState:
                 f"💹 带单员盈亏 · {label}\n"
                 f"{nickname}\nID {lead_portfolio_id}\n\n"
                 "尚无本系统实际成交盈亏记录。\n"
-                "收到成交后, 下一次 30 秒估值会自动生成明细。"
+                "收到成交后, 下一次 10 秒估值会自动生成明细。"
             )
         raw_total = Decimal(str(row["total_pnl_usdt"]))
         total = raw_total - Decimal(str(row["reset_total_pnl_usdt"]))
@@ -2549,13 +2549,17 @@ class PostgresTelegramState:
                        signal.signal_kind,signal.reference_price AS leader_reference_price,
                        signal.occurred_at AS source_occurred_at,snapshot.nickname,
                        claim.requested_quantity,claim.leverage,claim.limit_price,
-                       claim.expires_at,claim.claimed_at,decision.state AS decision_state,
+                       CASE WHEN upgrade.signal_id IS NULL
+                            THEN claim.expires_at ELSE NULL END AS expires_at,
+                       claim.claimed_at,decision.state AS decision_state,
                        submission.state AS submission_state,
                        coalesce(submission.filled_quantity,0) AS filled_quantity,
                        submission.exchange_order_id,assignment.slot
                   FROM copytrading.submission_claims AS claim
                   JOIN copytrading.signals AS signal USING(signal_id)
                   JOIN latest_decision AS decision USING(signal_id)
+                  LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade
+                    USING(signal_id)
                   LEFT JOIN latest_submission AS submission USING(signal_id)
                   LEFT JOIN snapshot USING(lead_portfolio_id)
                   LEFT JOIN LATERAL (
@@ -2629,7 +2633,9 @@ class PostgresTelegramState:
                        signal.lead_portfolio_id,signal.reference_price AS leader_reference_price,
                        signal.occurred_at AS source_occurred_at,snapshot.nickname,
                        decision.state,decision.local_quantity,decision.occurred_at,
-                       claim.order_type,claim.limit_price,claim.expires_at,
+                       claim.order_type,claim.limit_price,
+                       CASE WHEN upgrade.signal_id IS NULL
+                            THEN claim.expires_at ELSE NULL END AS expires_at,
                        claim.requested_quantity,claim.leverage,
                        pnl.fill_price AS system_fill_price,
                        pnl.resulting_average_entry_price AS system_average_entry_price,
@@ -2640,6 +2646,8 @@ class PostgresTelegramState:
                   JOIN copytrading.signals AS signal USING (signal_id)
                   LEFT JOIN snapshot USING(lead_portfolio_id)
                   LEFT JOIN copytrading.submission_claims AS claim USING(signal_id)
+                  LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade
+                    USING(signal_id)
                   LEFT JOIN copytrading.leader_pnl_events AS pnl USING(signal_id)
                   LEFT JOIN copytrading.source_fill_delta_events AS delta
                     ON delta.delta_event_id=signal.delta_event_id
@@ -2956,7 +2964,7 @@ class PostgresTelegramState:
             )
             line_rows = list(cursor.fetchall())
         if row is None:
-            return "💹 系统盈亏\n等待下一次 30 秒账户估值。"
+            return "💹 系统盈亏\n等待下一次 10 秒账户估值。"
         raw_total = Decimal(str(row["total_pnl_usdt"]))
         total = raw_total - Decimal(str(row["reset_total_pnl_usdt"]))
         today = raw_total - Decimal(str(row["day_anchor_pnl_usdt"]))
@@ -4116,6 +4124,8 @@ def _order_policy_text(row: Mapping[str, Any]) -> str:
     if order_type == "LIMIT":
         price = compact_decimal(row["limit_price"])
         expires_at = row.get("expires_at")
+        if expires_at is None:
+            return f"保护限价 {price} | 持续挂单至带单员退出该仓位"
         expires = (
             expires_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%m-%d %H:%M")
             if isinstance(expires_at, datetime)
@@ -4141,6 +4151,8 @@ def _pending_entry_state(row: Mapping[str, Any]) -> str:
 
 
 def _pending_expiry_text(value: Any, *, now: datetime) -> str:
+    if value is None:
+        return "有效期: 持续挂单至带单员退出该仓位"
     if not isinstance(value, datetime) or value.tzinfo is None:
         return "有效期: 未知"
     expires_at = value.astimezone(UTC)
@@ -4411,6 +4423,8 @@ def _notification_order_policy(payload: Mapping[str, Any]) -> str:
     except ValueError:
         price = "价格未知"
     expires_raw = payload.get("expires_at")
+    if expires_raw is None:
+        return f"保护限价 {price} | 持续挂单至带单员退出该仓位"
     try:
         expires_at = datetime.fromisoformat(str(expires_raw))
         expires = expires_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%m-%d %H:%M")

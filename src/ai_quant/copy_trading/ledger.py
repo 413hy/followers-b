@@ -85,11 +85,24 @@ class VirtualPositionLedger:
         signal: NormalizedSignal,
         *,
         rules: SymbolTradingRules,
+        source_position_quantity: Decimal | None = None,
     ) -> ReductionPlan:
         key = _key_for(signal)
         if signal.kind is not SignalKind.REDUCE:
             return _rejected_reduction(key, "COPY_REDUCTION_NOT_A_REDUCTION")
         current = self.position_for(signal)
+        if source_position_quantity is not None:
+            if not source_position_quantity.is_finite() or source_position_quantity < 0:
+                return _rejected_reduction(key, "COPY_SOURCE_POSITION_QUANTITY_INVALID")
+            # Source exposure and local fills are intentionally independent. A protected
+            # source increase may still be waiting locally, but it must remain in the source
+            # denominator so a later partial reduction cannot over-close an older local fill.
+            current = VirtualPosition(
+                key=current.key,
+                local_quantity=current.local_quantity,
+                observed_source_quantity=source_position_quantity,
+            )
+            self._positions[key] = current
         if current.local_quantity <= 0:
             return _rejected_reduction(key, "COPY_REDUCTION_ORPHAN")
         if current.observed_source_quantity <= 0:

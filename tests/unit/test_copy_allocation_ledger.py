@@ -430,6 +430,32 @@ def test_large_existing_symbol_position_can_use_remaining_shared_capacity() -> N
     assert decision.reason_codes == ()
 
 
+def test_xmr_regression_never_exceeds_five_usdt_margin_at_fifty_x() -> None:
+    decision = ProportionalAllocator().size_increase(
+        _signal(source_quantity="1.192", reference_price="335.18674"),
+        market_price=Decimal("335.18674"),
+        leader=LeaderAllocation(
+            lead_portfolio_id="5108371059752839168",
+            source_aum_usdt=Decimal("100000"),
+            portfolio_weight=Decimal("1"),
+        ),
+        usage=_usage(),
+        rules=SymbolTradingRules(
+            quantity_step=Decimal("0.001"),
+            minimum_quantity=Decimal("0.001"),
+            maximum_quantity=Decimal("1000"),
+            minimum_notional_usdt=Decimal("5"),
+            exchange_maximum_leverage=50,
+        ),
+    )
+
+    assert decision.approved
+    assert decision.leverage == 50
+    assert decision.local_quantity == Decimal("0.745")
+    assert decision.local_notional_usdt < Decimal("250")
+    assert decision.committed_margin_usdt < Decimal("5")
+
+
 def test_allocator_raises_tiny_source_fill_to_exchange_minimum() -> None:
     decision = ProportionalAllocator().size_increase(
         _signal(source_quantity="0.001"),
@@ -469,6 +495,45 @@ def test_virtual_ledgers_do_not_mix_leaders_inside_exchange_aggregate() -> None:
     assert ledger.position_for(leader_a).local_quantity == Decimal("0.005")
     assert ledger.position_for(leader_b).local_quantity == Decimal("0.020")
     assert ledger.aggregate_quantity("ETHUSDT", PositionSide.LONG) == Decimal("0.025")
+
+
+def test_unfilled_source_increase_remains_in_partial_reduction_denominator() -> None:
+    ledger = VirtualPositionLedger()
+    opening = _signal(source_quantity="1.192")
+    ledger.record_increase_fill(opening, filled_local_quantity=Decimal("0.845"))
+    reduction = _signal(kind=SignalKind.REDUCE, source_quantity="0.575")
+
+    plan = ledger.plan_reduction(
+        reduction,
+        rules=_rules(),
+        source_position_quantity=Decimal("1.767"),
+    )
+
+    assert plan.approved
+    assert plan.requested_local_quantity == Decimal("0.274")
+    updated = ledger.record_reduction_fill(
+        plan,
+        filled_local_quantity=plan.requested_local_quantity,
+    )
+    assert updated.local_quantity == Decimal("0.571")
+    assert updated.observed_source_quantity == Decimal("1.192")
+
+
+def test_full_source_exit_closes_all_system_recorded_leader_quantity() -> None:
+    ledger = VirtualPositionLedger()
+    opening = _signal(source_quantity="1.192")
+    ledger.record_increase_fill(opening, filled_local_quantity=Decimal("0.845"))
+    reduction = _signal(kind=SignalKind.REDUCE, source_quantity="1.192")
+
+    plan = ledger.plan_reduction(
+        reduction,
+        rules=_rules(),
+        source_position_quantity=Decimal("1.192"),
+    )
+
+    assert plan.approved
+    assert plan.closes_virtual_position
+    assert plan.requested_local_quantity == Decimal("0.845")
 
 
 def test_orphan_reduction_is_recorded_as_non_executable() -> None:
