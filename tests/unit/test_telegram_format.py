@@ -442,6 +442,21 @@ def test_selection_failure_explains_retention_retry_and_exact_reason() -> None:
     assert "COPY_" not in text
 
 
+def test_selection_directory_contract_failure_is_explained_in_chinese() -> None:
+    text = _notification_text(
+        {
+            "event": "copy_system",
+            "state": "SHORT_TERM_SELECTION_FAILED",
+            "strategy": "SHORT_TERM",
+            "reason_codes": ["COPY_SELECTION_DIRECTORY_NO_VALID_CANDIDATES"],
+        }
+    )
+
+    assert "Binance 本轮返回的候选资料均不完整" in text
+    assert "保留当前带单员" in text
+    assert "COPY_" not in text
+
+
 def test_recovery_notification_explains_action_and_evidence() -> None:
     text = _notification_text(
         {

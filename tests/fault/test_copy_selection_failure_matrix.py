@@ -73,7 +73,9 @@ def _quality_orders(leader_id: str) -> tuple[PublicLeaderOrder, ...]:
     return tuple(orders)
 
 
-def test_candidate_directory_combines_return_win_rate_and_drawdown_rankings() -> None:
+def test_candidate_directory_combines_return_win_rate_and_drawdown_rankings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     leaders_by_ranking = {
         "ROI": (_leader(1), _leader(2)),
         "WIN_RATE": (_leader(2), _leader(3)),
@@ -85,8 +87,16 @@ def test_candidate_directory_combines_return_win_rate_and_drawdown_rankings() ->
         def list_leaders(self, **kwargs: Any) -> LeaderPage:
             data_type = str(kwargs["data_type"])
             requested.append(data_type)
+            assert kwargs["skip_invalid_rows"] is True
             leaders = leaders_by_ranking[data_type]
-            return LeaderPage(leaders=leaders, total=len(leaders))
+            return LeaderPage(
+                leaders=leaders,
+                total=len(leaders) + (1 if data_type == "WIN_RATE" else 0),
+                invalid_row_count=1 if data_type == "WIN_RATE" else 0,
+                invalid_reason_codes=(
+                    ("COPY_FIELD_NICKNAME_INVALID",) if data_type == "WIN_RATE" else ()
+                ),
+            )
 
     leaders = service._candidate_directory(
         Public(),  # type: ignore[arg-type]
@@ -99,6 +109,62 @@ def test_candidate_directory_combines_return_win_rate_and_drawdown_rankings() ->
     assert {leader.lead_portfolio_id for leader in leaders} == {
         leader.lead_portfolio_id for ranking in leaders_by_ranking.values() for leader in ranking
     }
+    warning = json.loads(capsys.readouterr().out)
+    assert warning == {
+        "event": "copy_selection_invalid_candidates_skipped",
+        "ranking": "WIN_RATE",
+        "count": 1,
+        "reason_codes": ["COPY_FIELD_NICKNAME_INVALID"],
+    }
+
+
+def test_candidate_directory_fails_closed_when_every_ranking_row_is_invalid() -> None:
+    class Public:
+        def list_leaders(self, **kwargs: Any) -> LeaderPage:
+            assert kwargs["skip_invalid_rows"] is True
+            return LeaderPage(
+                leaders=(),
+                total=1,
+                invalid_row_count=1,
+                invalid_reason_codes=("COPY_FIELD_NICKNAME_INVALID",),
+            )
+
+    with pytest.raises(
+        BinancePublicCopyError,
+        match="COPY_SELECTION_DIRECTORY_NO_VALID_CANDIDATES",
+    ):
+        service._candidate_directory(
+            Public(),  # type: ignore[arg-type]
+            strategy=service.SelectionStrategy.SHORT_TERM,
+            candidate_pool_size=20,
+            observed_at_ms=int(datetime.now(UTC).timestamp() * 1000),
+        )
+
+
+def test_selection_failure_restarts_audit_to_avoid_midnight_snapshot_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+
+    def run(command: list[str], **kwargs: Any) -> Result:
+        del kwargs
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr(service.subprocess, "run", run)
+
+    assert service._trigger_codex_audit() is True
+    assert calls == [
+        [
+            "/usr/bin/systemctl",
+            "restart",
+            "--no-block",
+            "aiq-copy-codex-audit.service",
+        ]
+    ]
 
 
 def test_manual_clear_cooldown_ends_on_next_shanghai_day() -> None:

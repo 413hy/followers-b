@@ -124,6 +124,27 @@ def test_public_client_uses_only_exact_binance_paths_and_parses_pages() -> None:
     assert calls[1][3]["portfolioId"] == "5108371059752839168"
 
 
+def test_public_candidate_page_can_isolate_malformed_unrelated_rows() -> None:
+    invalid = {**_leader(), "leadPortfolioId": "5000000000000000001", "nickname": None}
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [invalid, _leader()], "total": 2}
+        )
+    )
+
+    with pytest.raises(BinancePublicCopyError, match="COPY_FIELD_NICKNAME_INVALID"):
+        client.list_leaders()
+
+    page = client.list_leaders(skip_invalid_rows=True)
+
+    assert [leader.lead_portfolio_id for leader in page.leaders] == [
+        "5108371059752839168"
+    ]
+    assert page.total == 2
+    assert page.invalid_row_count == 1
+    assert page.invalid_reason_codes == ("COPY_FIELD_NICKNAME_INVALID",)
+
+
 def test_public_directory_can_find_id_or_name_without_trusting_unrelated_bad_rows() -> None:
     target = {
         **_leader(),

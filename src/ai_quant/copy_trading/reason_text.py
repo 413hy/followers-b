@@ -182,6 +182,9 @@ _LABELS = {
     "COPY_SELECTION_SHORT_WIN_RATE_POOL_INSUFFICIENT": "短线一没有足够的合格候选",
     "COPY_SELECTION_SHORT_INTRADAY_POOL_INSUFFICIENT": "短线二没有足够的合格候选",
     "COPY_SELECTION_ELIGIBLE_POOL_INSUFFICIENT": "本轮没有足够的合格带单员候选",
+    "COPY_SELECTION_DIRECTORY_NO_VALID_CANDIDATES": (
+        "Binance 本轮返回的候选资料均不完整, 系统未使用不可靠数据并保留当前带单员"
+    ),
     "COPY_SELECTION_HISTORY_UNAVAILABLE": "带单员近期操作记录暂时无法读取",
     "COPY_SELECTION_POSITION_SIDE_AMBIGUOUS": "带单员公开记录无法可靠判断多空方向",
     "COPY_SELECTION_EXECUTION_SYMBOL_COMPATIBILITY_LOW": "带单员交易的币种与当前执行环境兼容率过低",

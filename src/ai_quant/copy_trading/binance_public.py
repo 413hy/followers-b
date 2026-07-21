@@ -45,6 +45,8 @@ class PublicHttpResult:
 class LeaderPage:
     leaders: tuple[LeaderSnapshot, ...]
     total: int
+    invalid_row_count: int = 0
+    invalid_reason_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +141,7 @@ class BinancePublicCopyClient:
         page_size: int = 50,
         time_range: str = "30D",
         data_type: str = "ROI",
+        skip_invalid_rows: bool = False,
     ) -> LeaderPage:
         if not 1 <= page_number <= 10_000 or not 1 <= page_size <= 100:
             raise ValueError("copy leader page is outside the supported range")
@@ -152,11 +155,21 @@ class BinancePublicCopyClient:
             time_range=time_range,
             data_type=data_type,
         )
-        try:
-            leaders = tuple(LeaderSnapshot.from_api(_require_mapping(row)) for row in rows)
-        except PublicCopyDataError as error:
-            raise BinancePublicCopyError(str(error)) from error
-        return LeaderPage(leaders=leaders, total=total)
+        leaders: list[LeaderSnapshot] = []
+        invalid_reasons: list[str] = []
+        for row in rows:
+            try:
+                leaders.append(LeaderSnapshot.from_api(_require_mapping(row)))
+            except PublicCopyDataError as error:
+                if not skip_invalid_rows:
+                    raise BinancePublicCopyError(str(error)) from error
+                invalid_reasons.append(str(error))
+        return LeaderPage(
+            leaders=tuple(leaders),
+            total=total,
+            invalid_row_count=len(invalid_reasons),
+            invalid_reason_codes=tuple(sorted(set(invalid_reasons))),
+        )
 
     def find_leader(
         self,

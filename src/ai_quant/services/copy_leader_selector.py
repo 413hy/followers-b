@@ -56,18 +56,13 @@ class _ProfiledCandidate:
 
 
 def _trigger_codex_audit() -> bool:
+    # Selection and the scheduled hourly audit both run at Shanghai 00:00. A plain
+    # start can be coalesced into the already-running audit, which then never sees
+    # the selection failure committed a moment later. Restart the read-only audit so
+    # the event-triggered run is guaranteed to take a fresh database snapshot.
     try:
-        active = subprocess.run(  # noqa: S603  # nosec B603
-            ["/usr/bin/systemctl", "is-active", "--quiet", _CODEX_AUDIT_UNIT],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=10,
-        )
-        if active.returncode == 0:
-            return False
         started = subprocess.run(  # noqa: S603  # nosec B603
-            ["/usr/bin/systemctl", "start", "--no-block", _CODEX_AUDIT_UNIT],
+            ["/usr/bin/systemctl", "restart", "--no-block", _CODEX_AUDIT_UNIT],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -161,9 +156,25 @@ def _candidate_directory(
             page_size=min(candidate_pool_size, 100),
             time_range="30D",
             data_type=data_type,
+            skip_invalid_rows=True,
         )
+        if page.invalid_row_count:
+            print(
+                json.dumps(
+                    {
+                        "event": "copy_selection_invalid_candidates_skipped",
+                        "ranking": data_type,
+                        "count": page.invalid_row_count,
+                        "reason_codes": list(page.invalid_reason_codes),
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
         for leader in page.leaders:
             merged.setdefault(leader.lead_portfolio_id, leader)
+    if not merged:
+        raise BinancePublicCopyError("COPY_SELECTION_DIRECTORY_NO_VALID_CANDIDATES")
     policy = _public_policy(strategy)
     directory_assessments = {
         leader_id: assess_candidate(
