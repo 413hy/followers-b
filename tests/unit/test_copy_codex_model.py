@@ -16,12 +16,19 @@ from ai_quant.copy_trading.codex_model import (
 )
 from ai_quant.copy_trading.codex_repair import CodexSystemRepairer
 from ai_quant.services.copy_codex_audit import (
+    _RECENT_SIGNAL_ERRORS_SQL,
     _newly_resolved_incident_ids,
     _pause_new_entries_justified,
     _reconciliation_status,
 )
 
 NOW = datetime(2026, 7, 19, 1, 39, tzinfo=UTC)
+
+
+def test_completed_codex_audit_prevents_repeat_signal_error_alerts() -> None:
+    assert "audit.findings->'reviewed_signal_ids'" in _RECENT_SIGNAL_ERRORS_SQL
+    assert "audit.findings ? 'codex'" in _RECENT_SIGNAL_ERRORS_SQL
+    assert "NOT (audit.findings ? 'reviewed_signal_ids')" in _RECENT_SIGNAL_ERRORS_SQL
 
 
 def test_audit_detects_incident_recovery_during_model_review() -> None:

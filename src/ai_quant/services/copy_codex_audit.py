@@ -34,6 +34,56 @@ _RECONCILIATION_GRACE = timedelta(minutes=2)
 _IN_FLIGHT_SUBMISSION_STATES = frozenset(
     {"SUBMITTING", "ACKNOWLEDGED", "PARTIALLY_FILLED", "UNKNOWN"}
 )
+_RECENT_SIGNAL_ERRORS_SQL = """
+WITH latest_decision AS (
+  SELECT DISTINCT ON (signal_id)
+         signal_id,state,reason_codes,occurred_at
+    FROM copytrading.signal_decision_events
+   ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
+), latest_submission AS (
+  SELECT DISTINCT ON (signal_id)
+         signal_id,state,reason_codes,occurred_at
+    FROM copytrading.submission_events
+   ORDER BY signal_id,occurred_at DESC,submission_event_id DESC
+)
+SELECT signal.signal_id,signal.lead_portfolio_id,signal.symbol,
+       signal.position_side,signal.signal_kind,
+       decision.state AS decision_state,
+       decision.reason_codes AS decision_reason_codes,
+       decision.occurred_at AS decision_occurred_at,
+       claim.client_order_id,claim.order_type,claim.limit_price,
+       submission.state AS submission_state,
+       submission.reason_codes AS submission_reason_codes,
+       submission.occurred_at AS submission_occurred_at,
+       snapshot.nickname
+  FROM latest_decision AS decision
+  JOIN copytrading.signals AS signal USING (signal_id)
+  LEFT JOIN copytrading.submission_claims AS claim USING (signal_id)
+  LEFT JOIN latest_submission AS submission USING (signal_id)
+  LEFT JOIN LATERAL (
+    SELECT nickname
+      FROM copytrading.leader_snapshots
+     WHERE lead_portfolio_id=signal.lead_portfolio_id
+     ORDER BY observed_at DESC,snapshot_id DESC LIMIT 1
+  ) AS snapshot ON TRUE
+ WHERE decision.state IN ('FAILED','UNCERTAIN')
+   AND decision.occurred_at >= %s
+   AND NOT EXISTS (
+     SELECT 1
+       FROM copytrading.health_check_runs AS audit
+      WHERE audit.check_kind='CODEX_AUDIT'
+        AND audit.findings ? 'codex'
+        AND (
+          (audit.findings->'reviewed_signal_ids') ? signal.signal_id::text
+          OR (
+            NOT (audit.findings ? 'reviewed_signal_ids')
+            AND audit.occurred_at >= decision.occurred_at
+          )
+        )
+   )
+ ORDER BY decision.occurred_at DESC,signal.signal_id
+ LIMIT 8
+"""
 
 
 def _arguments() -> argparse.Namespace:
@@ -251,46 +301,7 @@ def _recent_signal_errors(
     """Supply Codex with exact persisted trading errors, never credentials or raw payloads."""
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                WITH latest_decision AS (
-                  SELECT DISTINCT ON (signal_id)
-                         signal_id,state,reason_codes,occurred_at
-                    FROM copytrading.signal_decision_events
-                   ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
-                ), latest_submission AS (
-                  SELECT DISTINCT ON (signal_id)
-                         signal_id,state,reason_codes,occurred_at
-                    FROM copytrading.submission_events
-                   ORDER BY signal_id,occurred_at DESC,submission_event_id DESC
-                )
-                SELECT signal.signal_id,signal.lead_portfolio_id,signal.symbol,
-                       signal.position_side,signal.signal_kind,
-                       decision.state AS decision_state,
-                       decision.reason_codes AS decision_reason_codes,
-                       decision.occurred_at AS decision_occurred_at,
-                       claim.client_order_id,claim.order_type,claim.limit_price,
-                       submission.state AS submission_state,
-                       submission.reason_codes AS submission_reason_codes,
-                       submission.occurred_at AS submission_occurred_at,
-                       snapshot.nickname
-                  FROM latest_decision AS decision
-                  JOIN copytrading.signals AS signal USING (signal_id)
-                  LEFT JOIN copytrading.submission_claims AS claim USING (signal_id)
-                  LEFT JOIN latest_submission AS submission USING (signal_id)
-                  LEFT JOIN LATERAL (
-                    SELECT nickname
-                      FROM copytrading.leader_snapshots
-                     WHERE lead_portfolio_id=signal.lead_portfolio_id
-                     ORDER BY observed_at DESC,snapshot_id DESC LIMIT 1
-                  ) AS snapshot ON TRUE
-                 WHERE decision.state IN ('FAILED','UNCERTAIN')
-                   AND decision.occurred_at >= %s
-                 ORDER BY decision.occurred_at DESC,signal.signal_id
-                 LIMIT 8
-                """,
-                (now - timedelta(hours=2),),
-            )
+            cursor.execute(_RECENT_SIGNAL_ERRORS_SQL, (now - timedelta(hours=2),))
             rows = list(cursor.fetchall())
 
     def reasons(value: Any) -> list[str]:
@@ -469,6 +480,7 @@ def _persist(
     report_digest: str,
     occurred_at: datetime,
     applied_actions: list[str],
+    reviewed_signal_ids: list[str],
 ) -> str:
     status = str(document["status"])
     state = {
@@ -476,7 +488,11 @@ def _persist(
         "DEGRADED": HealthState.DEGRADED.value,
         "CRITICAL": HealthState.FAILED.value,
     }[status]
-    evidence = {"codex": document, "applied_actions": applied_actions}
+    evidence = {
+        "codex": document,
+        "applied_actions": applied_actions,
+        "reviewed_signal_ids": reviewed_signal_ids,
+    }
     run_id = hashlib.sha256(
         f"CODEX_AUDIT:{report_digest}:{occurred_at.isoformat()}".encode()
     ).hexdigest()
@@ -722,6 +738,7 @@ def main() -> int:
         report_digest=result.report_digest,
         occurred_at=now,
         applied_actions=applied,
+        reviewed_signal_ids=[str(error["signal_id"]) for error in recent_signal_errors],
     )
     _persist_resolved_incidents(
         database_url,
