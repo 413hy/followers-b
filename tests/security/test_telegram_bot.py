@@ -34,6 +34,7 @@ from ai_quant.notifications.telegram_bot import (
     multiplier_value_keyboard,
     notification_inline_keyboard,
     persistent_reply_keyboard,
+    pnl_overview_keyboard,
     position_close_keyboard,
     position_leader_keyboard,
 )
@@ -494,6 +495,7 @@ def test_contextual_inline_buttons_separate_navigation_from_dangerous_controls()
     funds = contextual_inline_keyboard("funds")["inline_keyboard"]
     fund_callbacks = [button["callback_data"] for row in funds for button in row]
     assert "margin:manage" in fund_callbacks
+    assert "summary_reset:request" in fund_callbacks
 
     codex = contextual_inline_keyboard("codex")["inline_keyboard"]
     codex_callbacks = [button["callback_data"] for row in codex for button in row]
@@ -666,6 +668,95 @@ def test_entry_margin_keyboard_marks_current_and_offers_custom_input() -> None:
     assert rows[0][1]["text"] == "✅ 60 U"
     assert "margin:custom" in callbacks
     assert callbacks[-1] == "view:funds"
+
+
+def test_pnl_overview_offers_account_summary_reset() -> None:
+    rows = pnl_overview_keyboard(Dashboard().pnl_leader_choices())["inline_keyboard"]
+    callbacks = [button["callback_data"] for row in rows for button in row]
+
+    assert "summary_reset:request" in callbacks
+
+
+def test_account_summary_reset_requires_authorization_and_two_step_confirmation(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def transport(
+        path: str,
+        document: dict[str, object],
+        timeout: float,
+    ) -> TelegramHttpResult:
+        del timeout
+        method = path.rsplit("/", 1)[-1]
+        calls.append((method, document))
+        result: Any = (
+            True
+            if method == "answerCallbackQuery"
+            else {"message_id": int(document.get("message_id", 88))}
+        )
+        return TelegramHttpResult(200, json.dumps({"ok": True, "result": result}).encode())
+
+    class SummaryControls:
+        def __init__(self) -> None:
+            self.executed: list[tuple[int, str]] = []
+
+        def execute_confirmed(self, *, user_id: int, nonce: str) -> str | None:
+            self.executed.append((user_id, nonce))
+            return "账户汇总初始化完成" if nonce == "nonce123456" else None
+
+    challenges = Challenges()
+    controls = SummaryControls()
+    router = TelegramMenuRouter(
+        client=TelegramBotClient(_config(tmp_path), transport=transport),
+        dashboard=Dashboard(),
+        challenges=challenges,
+        controls=controls,
+    )
+    message = {"message_id": 88, "chat": {"id": 42}}
+
+    router.handle(
+        {
+            "callback_query": {
+                "id": "denied",
+                "from": {"id": 99},
+                "data": "summary_reset:request",
+                "message": message,
+            }
+        }
+    )
+    assert challenges.created == []
+
+    router.handle(
+        {
+            "callback_query": {
+                "id": "request",
+                "from": {"id": 42},
+                "data": "summary_reset:request",
+                "message": message,
+            }
+        }
+    )
+    assert challenges.created == [(42, ControlAction.RESET_ACCOUNT_SUMMARY)]
+    confirmation = next(
+        document for method, document in calls if method == "sendMessage"
+    )
+    assert "不会删除或平掉仓位" in str(confirmation["text"])
+    confirmation_rows = confirmation["reply_markup"]["inline_keyboard"]  # type: ignore[index]
+    assert confirmation_rows[0][0]["callback_data"] == "summary_confirm:nonce123456"
+
+    router.handle(
+        {
+            "callback_query": {
+                "id": "confirm",
+                "from": {"id": 42},
+                "data": "summary_confirm:nonce123456",
+                "message": message,
+            }
+        }
+    )
+    assert controls.executed == [(42, "nonce123456")]
+    assert calls[-1][1]["text"] == "账户汇总初始化完成"
 
 
 def test_leader_lock_keyboard_binds_state_change_to_leader_id() -> None:

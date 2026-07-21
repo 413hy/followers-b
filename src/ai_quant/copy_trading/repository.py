@@ -33,6 +33,7 @@ from ai_quant.copy_trading.models import (
     SignalKind,
     SourcePositionSide,
 )
+from ai_quant.copy_trading.risk import logical_available_balance
 from ai_quant.copy_trading.selection import CandidateAssessment
 from ai_quant.copy_trading.selection_quality import LeaderPerformanceTrend
 
@@ -112,7 +113,8 @@ class CopyTradingRepository:
                 cursor.execute(
                     """
                     SELECT valuation_event_id,observed_at,
-                           exchange_margin_balance_usdt,operating_envelope_usdt
+                           exchange_margin_balance_usdt,exchange_available_balance_usdt,
+                           operating_envelope_usdt,total_initial_margin_usdt
                       FROM copytrading.account_valuation_events
                      ORDER BY observed_at DESC,valuation_event_id DESC LIMIT 1
                      FOR SHARE
@@ -131,12 +133,20 @@ class CopyTradingRepository:
                 exchange_margin_balance_usdt = Decimal(
                     str(anchor["exchange_margin_balance_usdt"])
                 )
+                exchange_available_balance_usdt = Decimal(
+                    str(anchor["exchange_available_balance_usdt"])
+                )
                 operating_envelope_usdt = Decimal(str(anchor["operating_envelope_usdt"]))
+                total_initial_margin_usdt = Decimal(str(anchor["total_initial_margin_usdt"]))
                 if (
                     not exchange_margin_balance_usdt.is_finite()
                     or exchange_margin_balance_usdt < 0
+                    or not exchange_available_balance_usdt.is_finite()
+                    or exchange_available_balance_usdt < 0
                     or not operating_envelope_usdt.is_finite()
                     or operating_envelope_usdt <= 0
+                    or not total_initial_margin_usdt.is_finite()
+                    or total_initial_margin_usdt < 0
                 ):
                     raise CopyRepositoryError("COPY_PNL_RESET_VALUATION_INVALID")
                 cursor.execute(
@@ -270,12 +280,23 @@ class CopyTradingRepository:
                     "state": "RESET",
                     "occurred_at": occurred_at.isoformat(),
                     "operating_envelope_usdt": str(operating_envelope_usdt),
+                    "logical_available_usdt": str(
+                        logical_available_balance(
+                            exchange_available_balance_usdt=(
+                                exchange_available_balance_usdt
+                            ),
+                            logical_equity_usdt=operating_envelope_usdt,
+                            total_initial_margin_usdt=total_initial_margin_usdt,
+                        )
+                    ),
+                    "total_initial_margin_usdt": str(total_initial_margin_usdt),
                     "reason_codes": [
                         "COPY_PNL_PRESENTATION_RESET",
                         "COPY_ACCOUNT_ENVELOPE_RESET",
                     ],
                     "summary": (
-                        "交易资金净值已按初始额度重新计算; 系统总盈亏、各条线、"
+                        "交易资金净值已按初始额度重新计算; 账户可用保证金已扣除"
+                        "当前真实占用后重新计算; 系统总盈亏、各条线、"
                         "各带单员及当前仓位的盈亏统计已从现在重新计为 0; "
                         "当前仓位、订单、带单员配置和历史审计记录均未修改, "
                         "已有仓位仍会正常占用保证金额度"
@@ -2886,7 +2907,11 @@ class CopyTradingRepository:
         unrealized_pnl = exchange_margin_balance_usdt - exchange_wallet_balance_usdt
         total_pnl = realized_net_pnl + unrealized_pnl
         logical_equity = max(Decimal("0"), operating_envelope_usdt + total_pnl)
-        logical_available = min(exchange_available_balance_usdt, logical_equity)
+        logical_available = logical_available_balance(
+            exchange_available_balance_usdt=exchange_available_balance_usdt,
+            logical_equity_usdt=logical_equity,
+            total_initial_margin_usdt=total_initial_margin_usdt,
+        )
         evidence = {
             "available": str(exchange_available_balance_usdt),
             "baseline": str(envelope_baseline_usdt),

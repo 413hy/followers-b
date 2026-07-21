@@ -107,6 +107,27 @@ class AccountRiskDecision:
     reason_codes: tuple[str, ...]
 
 
+def logical_available_balance(
+    *,
+    exchange_available_balance_usdt: Decimal,
+    logical_equity_usdt: Decimal,
+    total_initial_margin_usdt: Decimal,
+) -> Decimal:
+    """Return free logical margin after existing exchange exposure is reserved."""
+
+    values = (
+        exchange_available_balance_usdt,
+        logical_equity_usdt,
+        total_initial_margin_usdt,
+    )
+    if any(not value.is_finite() or value < 0 for value in values):
+        raise ValueError("copy logical available balance values are invalid")
+    return min(
+        exchange_available_balance_usdt,
+        max(Decimal("0"), logical_equity_usdt - total_initial_margin_usdt),
+    )
+
+
 def evaluate_account_risk(
     snapshot: CopyAccountSnapshot,
     *,

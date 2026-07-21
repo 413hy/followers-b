@@ -9,6 +9,7 @@ from ai_quant.copy_trading.health import (
     HealthState,
     HostHealthFacts,
     evaluate_health,
+    logical_account_snapshot,
 )
 from ai_quant.copy_trading.models import PositionSide, RuntimeControlState
 from ai_quant.copy_trading.risk import CopyAccountSnapshot
@@ -18,6 +19,25 @@ NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 
 def test_required_slot_health_excludes_optional_owner_slots() -> None:
     assert "slot IN ('LONG_TERM','SHORT_TERM_1','SHORT_TERM_2')" in _FACTS_SQL
+
+
+def test_watchdog_logical_available_reserves_existing_initial_margin() -> None:
+    account = logical_account_snapshot(
+        {
+            "totalWalletBalance": "5000",
+            "totalMarginBalance": "5000",
+            "availableBalance": "4910",
+            "totalInitialMargin": "90",
+            "totalMaintMargin": "10",
+        },
+        {"canTrade": True},
+        {"dualSidePosition": True},
+        baseline_usdt=Decimal("5000"),
+        observed_at=NOW,
+    )
+
+    assert account.margin_balance_usdt == Decimal("150")
+    assert account.available_balance_usdt == Decimal("60")
 
 
 def test_removed_execution_reconciliation_window_is_not_in_health_query() -> None:

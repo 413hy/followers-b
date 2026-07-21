@@ -45,7 +45,11 @@ from ai_quant.copy_trading.repository import (
     LeaderAssignment,
     RuntimeControl,
 )
-from ai_quant.copy_trading.risk import CopyAccountSnapshot, evaluate_account_risk
+from ai_quant.copy_trading.risk import (
+    CopyAccountSnapshot,
+    evaluate_account_risk,
+    logical_available_balance,
+)
 
 _RECONCILIATION_GRACE_REASON_CODES = frozenset(
     {
@@ -950,7 +954,11 @@ class CopyTradingRuntime:
             can_trade=raw.can_trade,
             wallet_balance_usdt=logical_margin,
             margin_balance_usdt=logical_margin,
-            available_balance_usdt=min(raw.available_balance_usdt, logical_margin),
+            available_balance_usdt=logical_available_balance(
+                exchange_available_balance_usdt=raw.available_balance_usdt,
+                logical_equity_usdt=logical_margin,
+                total_initial_margin_usdt=raw.total_initial_margin_usdt,
+            ),
             total_initial_margin_usdt=raw.total_initial_margin_usdt,
             total_maintenance_margin_usdt=raw.total_maintenance_margin_usdt,
         )

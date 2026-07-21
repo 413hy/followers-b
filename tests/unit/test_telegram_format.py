@@ -90,6 +90,8 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
         "event": "copy_pnl_reset",
         "occurred_at": "2026-07-21T01:30:00+00:00",
         "operating_envelope_usdt": "150.000000000000000000",
+        "logical_available_usdt": "61.440000000000000000",
+        "total_initial_margin_usdt": "88.560000000000000000",
         "reason_codes": [
             "COPY_PNL_PRESENTATION_RESET",
             "COPY_ACCOUNT_ENVELOPE_RESET",
@@ -103,6 +105,8 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
     assert "均已从现在重新计为 0" in text
     assert "当前仓位、待成交订单" in text
     assert "已有仓位仍会占用保证金额度" in text
+    assert "账户可用 61.44 U" in text
+    assert "当前实际占用 88.56 U" in text
     assert "07-21 09:30:00" in text
     assert _notification_contextual_view(payload) is None
 

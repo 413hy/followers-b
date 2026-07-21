@@ -235,6 +235,7 @@ class ControlAction(StrEnum):
     PAUSE_NEW_ENTRIES = "pause"
     RESUME_TESTNET = "resume"
     REDUCE_ALL = "reduce_all"
+    RESET_ACCOUNT_SUMMARY = "reset_summary"
 
 
 class TelegramDashboardProvider(Protocol):
@@ -671,6 +672,17 @@ class TelegramMenuRouter:
                     ),
                     contextual_inline_keyboard("codex"),
                 )
+            return
+        if value == "summary_reset:request":
+            if user_id not in self._client.config.authorized_user_ids:
+                self._answer_callback(callback_id, "你没有账户初始化权限")
+                return
+            self._answer_callback(callback_id, "请二次确认")
+            self._request_confirmation(
+                chat_id,
+                user_id,
+                ControlAction.RESET_ACCOUNT_SUMMARY,
+            )
             return
         if (
             value.startswith(
@@ -1148,6 +1160,25 @@ class TelegramMenuRouter:
                 except TelegramMessageNotModified:
                     pass
             return
+        if value.startswith("summary_confirm:"):
+            nonce = value.removeprefix("summary_confirm:")
+            try:
+                result = self._controls.execute_confirmed(user_id=user_id, nonce=nonce)
+            except RuntimeError:
+                self._answer_callback(callback_id, "初始化失败, 请刷新后重试")
+                return
+            if result is None:
+                self._client.answer_callback(callback_id, "确认已失效")
+                return
+            self._answer_callback(callback_id, "已初始化")
+            if message_id is not None:
+                self._client.edit_message(
+                    chat_id,
+                    message_id,
+                    result,
+                    reply_markup=contextual_inline_keyboard("funds"),
+                )
+            return
         if value.startswith("confirm:"):
             nonce = value.removeprefix("confirm:")
             result = self._controls.execute_confirmed(user_id=user_id, nonce=nonce)
@@ -1369,14 +1400,34 @@ class TelegramMenuRouter:
         action: ControlAction,
     ) -> None:
         nonce = self._challenges.create(user_id=user_id, action=action)
+        reset_summary = action is ControlAction.RESET_ACCOUNT_SUMMARY
         self._client.send_message(
             chat_id,
-            f"⚠️ 确认执行: {_action_label(action)}\n确认按钮 2 分钟内有效。",
+            (
+                "⚠️ 确认初始化账户汇总\n"
+                "当前净值将重新以 150 U 为起点; 今日、本月、累计、各条线、"
+                "各带单员和各仓位盈亏将从现在归零。\n"
+                "账户可用保证金会按 150 U 扣除已有仓位和待入场订单的真实占用后重算; "
+                "不会删除或平掉仓位、撤销订单、修改带单员和额度配置。\n"
+                "确认按钮 2 分钟内有效。"
+                if reset_summary
+                else f"⚠️ 确认执行: {_action_label(action)}\n确认按钮 2 分钟内有效。"
+            ),
             reply_markup={
                 "inline_keyboard": [
                     [
-                        {"text": "✅ 确认执行", "callback_data": f"confirm:{nonce}"},
-                        {"text": "取消", "callback_data": f"cancel:{nonce}"},
+                        {
+                            "text": "✅ 确认初始化" if reset_summary else "✅ 确认执行",
+                            "callback_data": (
+                                f"summary_confirm:{nonce}"
+                                if reset_summary
+                                else f"confirm:{nonce}"
+                            ),
+                        },
+                        {
+                            "text": "取消",
+                            "callback_data": "view:funds" if reset_summary else f"cancel:{nonce}",
+                        },
                     ]
                 ]
             },
@@ -1447,7 +1498,10 @@ def contextual_inline_keyboard(view: str) -> dict[str, object]:
                 {"text": "🔄 刷新资金", "callback_data": "view:funds"},
                 {"text": "💹 系统盈亏", "callback_data": "view:pnl"},
             ],
-            [{"text": "⚙️ 配置可用保证金", "callback_data": "margin:manage"}],
+            [
+                {"text": "⚙️ 配置可用保证金", "callback_data": "margin:manage"},
+                {"text": "♻️ 初始化账户汇总", "callback_data": "summary_reset:request"},
+            ],
         ],
         "pnl": [
             [
@@ -1582,6 +1636,7 @@ def pnl_overview_keyboard(
                 {"text": "📈 当前仓位", "callback_data": "view:positions"},
             ],
             *leader_rows,
+            [{"text": "♻️ 初始化账户汇总", "callback_data": "summary_reset:request"}],
             [{"text": "💰 资金边界", "callback_data": "view:funds"}],
         ]
     }
@@ -2031,6 +2086,7 @@ def _action_label(action: ControlAction) -> str:
         ControlAction.PAUSE_NEW_ENTRIES: "暂停所有新开仓 (减仓仍允许)",
         ControlAction.RESUME_TESTNET: "恢复新开仓",
         ControlAction.REDUCE_ALL: "按虚拟账本全部减仓",
+        ControlAction.RESET_ACCOUNT_SUMMARY: "初始化账户汇总",
     }[action]
 
 

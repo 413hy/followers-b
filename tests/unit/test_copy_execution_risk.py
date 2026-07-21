@@ -24,9 +24,31 @@ from ai_quant.copy_trading.risk import (
     CopyAccountRiskPolicy,
     CopyAccountSnapshot,
     evaluate_account_risk,
+    logical_available_balance,
 )
 
 NOW = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
+
+
+def test_logical_available_balance_reserves_existing_initial_margin() -> None:
+    assert logical_available_balance(
+        exchange_available_balance_usdt=Decimal("4839.01"),
+        logical_equity_usdt=Decimal("150"),
+        total_initial_margin_usdt=Decimal("88.56"),
+    ) == Decimal("61.44")
+
+
+def test_logical_available_balance_never_exceeds_exchange_or_goes_negative() -> None:
+    assert logical_available_balance(
+        exchange_available_balance_usdt=Decimal("20"),
+        logical_equity_usdt=Decimal("150"),
+        total_initial_margin_usdt=Decimal("10"),
+    ) == Decimal("20")
+    assert logical_available_balance(
+        exchange_available_balance_usdt=Decimal("100"),
+        logical_equity_usdt=Decimal("50"),
+        total_initial_margin_usdt=Decimal("75"),
+    ) == Decimal("0")
 
 
 def _signal(

@@ -337,6 +337,18 @@ def test_entry_margin_limit_is_bounded_two_step_and_append_only() -> None:
     assert "control.reject_append_only_mutation()" in migration
 
 
+def test_account_summary_reset_extends_the_existing_two_step_challenge() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations/business/versions/0030_account_summary_reset.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "0030_account_summary_reset"' in migration
+    assert 'down_revision = "0029_entry_margin_limit"' in migration
+    assert "reset_summary" in migration
+    assert "telegram_control_challenges_action_check" in migration
+
+
 def test_copy_pnl_migration_has_account_and_per_leader_append_only_ledgers() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (root / "migrations/business/versions/0011_copy_account_valuations.py").read_text()

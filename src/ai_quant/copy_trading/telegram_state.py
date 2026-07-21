@@ -27,6 +27,8 @@ from ai_quant.copy_trading.reason_text import (
     reason_code_text,
     translate_reason_codes_in_text,
 )
+from ai_quant.copy_trading.repository import CopyRepositoryError, CopyTradingRepository
+from ai_quant.copy_trading.risk import logical_available_balance
 from ai_quant.copy_trading.telegram_format import (
     compact_decimal,
     compact_money,
@@ -336,6 +338,8 @@ class PostgresTelegramState:
             raise TelegramStateError("TELEGRAM_CHALLENGE_CONSUME_FAILED") from error
 
     def execute(self, *, user_id: int, action: ControlAction) -> str:
+        if action is ControlAction.RESET_ACCOUNT_SUMMARY:
+            return self._reset_account_summary(user_id=user_id, occurred_at=datetime.now(UTC))
         state = _control_state(action)
         now = datetime.now(UTC)
         event_id = _digest(
@@ -371,6 +375,7 @@ class PostgresTelegramState:
             return None
         now = datetime.now(UTC)
         nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        result_message: str | None = None
         try:
             with self._connect() as connection, connection.cursor() as cursor:
                 cursor.execute(
@@ -393,7 +398,13 @@ class PostgresTelegramState:
                     return None
                 action = ControlAction(str(row["action"]))
                 challenge_id = str(row["challenge_id"])
-                state = _control_state(action)
+                if action is ControlAction.RESET_ACCOUNT_SUMMARY:
+                    result_message = self._reset_account_summary(
+                        user_id=user_id,
+                        occurred_at=now,
+                    )
+                else:
+                    state = _control_state(action)
                 cursor.execute(
                     """
                     INSERT INTO copytrading.telegram_challenge_consumptions(
@@ -411,30 +422,50 @@ class PostgresTelegramState:
                 )
                 if cursor.fetchone() is None:
                     return None
-                event_id = _digest(
-                    {
-                        "actor_id": f"telegram:{user_id}",
-                        "challenge_id": challenge_id,
-                        "state": state,
-                    }
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO copytrading.runtime_control_events(
-                      control_event_id,state,actor_id,reason_codes,occurred_at
-                    ) VALUES (%s,%s,%s,%s,%s)
-                    """,
-                    (
-                        event_id,
-                        state,
-                        f"telegram:{user_id}",
-                        Jsonb([f"TELEGRAM_{action.value.upper()}"]),
-                        now,
-                    ),
-                )
+                if action is not ControlAction.RESET_ACCOUNT_SUMMARY:
+                    event_id = _digest(
+                        {
+                            "actor_id": f"telegram:{user_id}",
+                            "challenge_id": challenge_id,
+                            "state": state,
+                        }
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO copytrading.runtime_control_events(
+                          control_event_id,state,actor_id,reason_codes,occurred_at
+                        ) VALUES (%s,%s,%s,%s,%s)
+                        """,
+                        (
+                            event_id,
+                            state,
+                            f"telegram:{user_id}",
+                            Jsonb([f"TELEGRAM_{action.value.upper()}"]),
+                            now,
+                        ),
+                    )
         except psycopg.Error as error:
             raise TelegramStateError("TELEGRAM_CONFIRMED_CONTROL_WRITE_FAILED") from error
-        return _control_message(action, environment_label=self._environment_label)
+        return result_message or _control_message(
+            action,
+            environment_label=self._environment_label,
+        )
+
+    def _reset_account_summary(self, *, user_id: int, occurred_at: datetime) -> str:
+        try:
+            CopyTradingRepository(self._dsn).reset_pnl_baseline(
+                actor_id=f"telegram:{user_id}",
+                occurred_at=occurred_at,
+            )
+        except CopyRepositoryError as error:
+            raise TelegramStateError("TELEGRAM_ACCOUNT_SUMMARY_RESET_FAILED") from error
+        return (
+            "✅ 账户汇总已初始化\n"
+            "当前净值已重新以 150 U 为起点; 今日、本月、累计、各条线、"
+            "各带单员和各仓位盈亏均从现在重新计为 0。\n"
+            "可用保证金已扣除当前仓位和待入场订单的真实占用后重新计算; "
+            "仓位、订单、带单员与额度配置均未修改。"
+        )
 
     def position_leader_choices(self) -> tuple[PositionLeaderChoice, ...]:
         try:
@@ -2915,7 +2946,8 @@ class PostgresTelegramState:
             pending = cursor.fetchone()
             cursor.execute(
                 """
-                SELECT logical_equity_usdt
+                SELECT logical_equity_usdt,exchange_margin_balance_usdt,
+                       exchange_available_balance_usdt,total_initial_margin_usdt
                   FROM copytrading.account_valuation_events
                  ORDER BY observed_at DESC,valuation_event_id DESC LIMIT 1
                 """,
@@ -2928,8 +2960,28 @@ class PostgresTelegramState:
             if envelope
             else Decimal("150")
         )
-        logical_equity = (
-            Decimal(str(valuation["logical_equity_usdt"]))
+        logical_equity = operating_envelope
+        if valuation:
+            logical_equity = (
+                max(
+                    Decimal("0"),
+                    operating_envelope
+                    + Decimal(str(valuation["exchange_margin_balance_usdt"]))
+                    - Decimal(str(envelope["exchange_margin_balance_usdt"])),
+                )
+                if envelope
+                else Decimal(str(valuation["logical_equity_usdt"]))
+            )
+        account_available = (
+            logical_available_balance(
+                exchange_available_balance_usdt=Decimal(
+                    str(valuation["exchange_available_balance_usdt"])
+                ),
+                logical_equity_usdt=logical_equity,
+                total_initial_margin_usdt=Decimal(
+                    str(valuation["total_initial_margin_usdt"])
+                ),
+            )
             if valuation
             else operating_envelope
         )
@@ -2949,6 +3001,7 @@ class PostgresTelegramState:
             f" | 保留: {compact_money(reserve)}U\n"
             f"{_CARD_DIVIDER}\n"
             "【当前使用】\n"
+            f"账户可用保证金: {compact_money(account_available)}U\n"
             f"已成交仓位占用: {compact_money(committed)}U\n"
             f"待入场订单预留: {compact_money(pending_margin)}U\n"
             f"剩余可开仓保证金: {compact_money(remaining)}U\n"
@@ -3158,6 +3211,13 @@ class PostgresTelegramState:
         net_account_adjustment = _net_account_adjustment(total, line_rows)
         envelope = Decimal(str(row["operating_envelope_usdt"]))
         displayed_equity = _rebased_logical_equity(envelope, total)
+        displayed_available = logical_available_balance(
+            exchange_available_balance_usdt=Decimal(
+                str(row["exchange_available_balance_usdt"])
+            ),
+            logical_equity_usdt=displayed_equity,
+            total_initial_margin_usdt=Decimal(str(row["total_initial_margin_usdt"])),
+        )
         roi = (total / envelope) * Decimal("100")
         observed_at = row["observed_at"]
         observed_text = (
@@ -3174,7 +3234,7 @@ class PostgresTelegramState:
             f"已实现净额: {signed_money(realized)} U\n"
             f"未实现盈亏: {signed_money(unrealized)} U\n"
             f"手续费/资金费等净调整: {signed_money(net_account_adjustment)} U\n"
-            f"逻辑可用余额: {compact_money(row['logical_available_usdt'])} U\n"
+            f"账户可用保证金: {compact_money(displayed_available)} U\n"
             f"占用保证金: {compact_money(row['total_initial_margin_usdt'])} U"
         )
         line_cards: list[str] = []
@@ -3846,11 +3906,22 @@ def _notification_text_raw(
         return "\n".join(_safe_text(line, 500) for line in summary.splitlines())[:1000]
     if payload.get("event") == "copy_pnl_reset":
         operating_envelope = compact_money(payload.get("operating_envelope_usdt", "150"))
+        margin_line = ""
+        if payload.get("logical_available_usdt") is not None and payload.get(
+            "total_initial_margin_usdt"
+        ) is not None:
+            logical_available = compact_money(payload["logical_available_usdt"])
+            initial_margin = compact_money(payload["total_initial_margin_usdt"])
+            margin_line = (
+                f"保证金: 账户可用 {logical_available} U | 当前实际占用 {initial_margin} U; "
+                "共享开仓额度仍按原配置执行\n"
+            )
         return (
             "💹 交易资金与盈亏已恢复初始状态\n"
             f"系统处理: 交易资金净值已恢复为 {operating_envelope} U; 系统总盈亏、"
             "每日/每月/累计盈亏、各条线、"
             "各带单员和当前仓位的盈亏均已从现在重新计为 0\n"
+            f"{margin_line}"
             "保留内容: 当前仓位、待成交订单、带单员配置和历史审计记录均未修改; "
             "已有仓位仍会占用保证金额度\n"
             f"生效时间: {_display_shanghai_time(payload.get('occurred_at'))}"
