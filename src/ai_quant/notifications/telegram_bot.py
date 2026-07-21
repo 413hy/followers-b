@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -287,6 +288,12 @@ class FollowMultiplierProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class EntryMarginLimitProposal:
+    nonce: str
+    confirmation_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class LeaderLockChoice:
     lead_portfolio_id: str
     button_label: str
@@ -354,6 +361,24 @@ class TelegramPositionAdmin(Protocol):
     ) -> PositionCloseProposal: ...
 
     def execute_leader_positions_close_confirmed(
+        self,
+        *,
+        user_id: int,
+        nonce: str,
+    ) -> str | None: ...
+
+
+class TelegramMarginAdmin(Protocol):
+    def entry_margin_limit(self) -> Decimal: ...
+
+    def create_entry_margin_limit_change(
+        self,
+        *,
+        user_id: int,
+        limit_usdt: Decimal,
+    ) -> EntryMarginLimitProposal: ...
+
+    def execute_entry_margin_limit_confirmed(
         self,
         *,
         user_id: int,
@@ -449,6 +474,7 @@ class TelegramMenuRouter:
         controls: TelegramControlHandler,
         leader_admin: TelegramLeaderAdmin | None = None,
         position_admin: TelegramPositionAdmin | None = None,
+        margin_admin: TelegramMarginAdmin | None = None,
         audit_trigger: Callable[[], bool] | None = None,
     ) -> None:
         self._client = client
@@ -457,6 +483,7 @@ class TelegramMenuRouter:
         self._controls = controls
         self._leader_admin = leader_admin
         self._position_admin = position_admin
+        self._margin_admin = margin_admin
         self._audit_trigger = audit_trigger
         self._notification_token: str | None = None
 
@@ -475,6 +502,36 @@ class TelegramMenuRouter:
                 self._client.answer_callback(callback_id, "未授权会话")
             return
         if update_kind == "message":
+            try:
+                margin_limit = _message_entry_margin_limit(value)
+            except ValueError:
+                self._client.send_message(
+                    chat_id,
+                    "可用保证金额度格式: /margin_limit 60。请输入 5-120 U, 最多两位小数。",
+                    reply_markup=contextual_inline_keyboard("funds"),
+                )
+                return
+            if margin_limit is not None:
+                if user_id not in self._client.config.authorized_user_ids:
+                    self._client.send_message(chat_id, "你没有资金配置权限。")
+                    return
+                if self._margin_admin is None:
+                    self._client.send_message(chat_id, "资金配置功能当前不可用。")
+                    return
+                try:
+                    margin_proposal = self._margin_admin.create_entry_margin_limit_change(
+                        user_id=user_id,
+                        limit_usdt=margin_limit,
+                    )
+                except (ValueError, RuntimeError):
+                    self._client.send_message(
+                        chat_id,
+                        "额度未变更或配置已失效, 请刷新资金页面后重试。",
+                        reply_markup=contextual_inline_keyboard("funds"),
+                    )
+                    return
+                self._send_entry_margin_confirmation(chat_id, margin_proposal)
+                return
             try:
                 leader_command = _message_leader_command(value)
             except ValueError:
@@ -627,11 +684,80 @@ class TelegramMenuRouter:
                     "pos:",
                     "pos_confirm:",
                     "pos_leader_confirm:",
+                    "margin:",
+                    "margin_confirm:",
                 )
             )
             and user_id not in self._client.config.authorized_user_ids
         ):
             self._answer_callback(callback_id, "你没有管理权限")
+            return
+        if value == "margin:manage":
+            if self._margin_admin is None:
+                self._answer_callback(callback_id, "资金配置功能不可用")
+                return
+            current = self._margin_admin.entry_margin_limit()
+            self._answer_callback(callback_id)
+            if message_id is not None:
+                self._edit_text(
+                    chat_id,
+                    message_id,
+                    self._dashboard.render("funds"),
+                    entry_margin_limit_keyboard(current),
+                )
+            return
+        if value == "margin:custom":
+            if self._margin_admin is None:
+                self._answer_callback(callback_id, "资金配置功能不可用")
+                return
+            self._answer_callback(callback_id, "请回复额度")
+            self._client.send_message(
+                chat_id,
+                _ENTRY_MARGIN_INPUT_PROMPT,
+                reply_markup={
+                    "force_reply": True,
+                    "selective": True,
+                    "input_field_placeholder": "输入 5-120 U, 最多两位小数",
+                },
+            )
+            return
+        if value.startswith("margin:set:"):
+            if self._margin_admin is None:
+                self._answer_callback(callback_id, "资金配置功能不可用")
+                return
+            try:
+                limit_usdt = _normalize_entry_margin_limit(
+                    value.removeprefix("margin:set:")
+                )
+                margin_proposal = self._margin_admin.create_entry_margin_limit_change(
+                    user_id=user_id,
+                    limit_usdt=limit_usdt,
+                )
+            except (ValueError, RuntimeError):
+                self._answer_callback(callback_id, "额度未变更或参数已失效")
+                return
+            self._answer_callback(callback_id, "请二次确认")
+            self._send_entry_margin_confirmation(chat_id, margin_proposal)
+            return
+        if value.startswith("margin_confirm:"):
+            if self._margin_admin is None:
+                self._answer_callback(callback_id, "资金配置功能不可用")
+                return
+            result = self._margin_admin.execute_entry_margin_limit_confirmed(
+                user_id=user_id,
+                nonce=value.removeprefix("margin_confirm:"),
+            )
+            if result is None:
+                self._answer_callback(callback_id, "确认已失效")
+                return
+            self._answer_callback(callback_id, "已执行")
+            if message_id is not None:
+                self._edit_text(
+                    chat_id,
+                    message_id,
+                    result,
+                    entry_margin_limit_keyboard(self._margin_admin.entry_margin_limit()),
+                )
             return
         if value.startswith("pos:close:"):
             if self._position_admin is None:
@@ -1136,6 +1262,27 @@ class TelegramMenuRouter:
             },
         )
 
+    def _send_entry_margin_confirmation(
+        self,
+        chat_id: int,
+        proposal: EntryMarginLimitProposal,
+    ) -> None:
+        self._client.send_message(
+            chat_id,
+            proposal.confirmation_text,
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "✅ 确认额度",
+                            "callback_data": f"margin_confirm:{proposal.nonce}",
+                        },
+                        {"text": "取消", "callback_data": "margin:manage"},
+                    ]
+                ]
+            },
+        )
+
     def _send_leader_lock_confirmation(
         self,
         chat_id: int,
@@ -1299,7 +1446,8 @@ def contextual_inline_keyboard(view: str) -> dict[str, object]:
             [
                 {"text": "🔄 刷新资金", "callback_data": "view:funds"},
                 {"text": "💹 系统盈亏", "callback_data": "view:pnl"},
-            ]
+            ],
+            [{"text": "⚙️ 配置可用保证金", "callback_data": "margin:manage"}],
         ],
         "pnl": [
             [
@@ -1676,6 +1824,26 @@ def multiplier_value_keyboard(choice: LeaderMultiplierChoice) -> dict[str, objec
     }
 
 
+def entry_margin_limit_keyboard(current: Decimal) -> dict[str, object]:
+    current = _normalize_entry_margin_limit(str(current))
+    buttons = [
+        {
+            "text": f"{'✅ ' if current == value else ''}{value} U",
+            "callback_data": f"margin:set:{value}",
+        }
+        for value in (Decimal("30"), Decimal("60"), Decimal("90"), Decimal("120"))
+    ]
+    return {
+        "inline_keyboard": [
+            buttons[:2],
+            buttons[2:],
+            [{"text": "✍️ 自定义额度", "callback_data": "margin:custom"}],
+            [{"text": "🔄 刷新资金", "callback_data": "margin:manage"}],
+            [{"text": "↩️ 返回资金页", "callback_data": "view:funds"}],
+        ]
+    }
+
+
 def _parse_update(
     update: Mapping[str, Any],
 ) -> tuple[str, str | None, int, int, int | None, str] | None:
@@ -1694,11 +1862,12 @@ def _parse_update(
             reply = message.get("reply_to_message")
             reply_text = reply.get("text") if isinstance(reply, dict) else None
             slot = _leader_input_reply_slot(reply_text) if isinstance(reply_text, str) else None
-            value = (
-                f"/leader_input {leader_slot_callback(slot)} {text[:80]}"
-                if slot is not None
-                else text[:128]
-            )
+            if slot is not None:
+                value = f"/leader_input {leader_slot_callback(slot)} {text[:80]}"
+            elif isinstance(reply_text, str) and _entry_margin_input_reply(reply_text):
+                value = f"/margin_input {text[:32]}"
+            else:
+                value = text[:128]
             return "message", None, int(chat["id"]), int(sender["id"]), None, value
     callback = update.get("callback_query")
     if isinstance(callback, dict):
@@ -1758,6 +1927,30 @@ def _message_action(text: str) -> ControlAction | None:
     }.get(command)
 
 
+def _message_entry_margin_limit(text: str) -> Decimal | None:
+    parts = text.strip().split()
+    if not parts:
+        return None
+    command = parts[0].split("@", maxsplit=1)[0].lower()
+    if command not in {"/margin_limit", "/margin_input"}:
+        return None
+    if len(parts) != 2:
+        raise ValueError("Telegram entry margin command is invalid")
+    return _normalize_entry_margin_limit(parts[1])
+
+
+def _normalize_entry_margin_limit(raw: str) -> Decimal:
+    if len(raw) > 16 or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", raw):
+        raise ValueError("Telegram entry margin limit is invalid")
+    try:
+        value = Decimal(raw)
+    except InvalidOperation as error:
+        raise ValueError("Telegram entry margin limit is invalid") from error
+    if not value.is_finite() or not Decimal("5") <= value <= Decimal("120"):
+        raise ValueError("Telegram entry margin limit is outside bounds")
+    return value.quantize(Decimal("0.01"))
+
+
 def _message_leader_command(text: str) -> tuple[str, LeaderSlot, str] | None:
     parts = text.strip().split(maxsplit=2)
     if not parts:
@@ -1805,6 +1998,20 @@ def _leader_input_prompt(slot: LeaderSlot) -> str:
         f"✍️ 输入{leader_slot_label(slot)}带单员\n"
         "请直接回复带单员 ID, 或回复完整/部分名称进行搜索。\n"
         "系统会实时读取公开资料和最近操作, 之后仍需二次确认。"
+    )
+
+
+_ENTRY_MARGIN_INPUT_PROMPT = (
+    "✍️ 输入共享可用保证金额度\n"
+    "请直接回复 5-120 之间的 U 数值, 最多两位小数。\n"
+    "确认后只限制后续新开仓, 不会调整或强平已有仓位。"
+)
+
+
+def _entry_margin_input_reply(reply_text: str) -> bool:
+    return (
+        bool(reply_text)
+        and reply_text.splitlines()[0] == _ENTRY_MARGIN_INPUT_PROMPT.splitlines()[0]
     )
 
 

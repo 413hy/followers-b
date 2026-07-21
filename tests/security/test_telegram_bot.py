@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import pytest
 from ai_quant.copy_trading.leader_slots import LeaderSlot
 from ai_quant.notifications.telegram_bot import (
     ControlAction,
+    EntryMarginLimitProposal,
     FollowMultiplierProposal,
     LeaderCandidateChoice,
     LeaderChangeProposal,
@@ -25,6 +27,7 @@ from ai_quant.notifications.telegram_bot import (
     TelegramMenuRouter,
     bounded_telegram_text,
     contextual_inline_keyboard,
+    entry_margin_limit_keyboard,
     leader_lock_keyboard,
     leader_management_keyboard,
     multiplier_management_keyboard,
@@ -304,6 +307,37 @@ class PositionAdmin:
         return "leader positions close submitted" if nonce == "leaderpositionnonce" else None
 
 
+class MarginAdmin:
+    def __init__(self) -> None:
+        self.current = Decimal("120.00")
+        self.proposed: list[tuple[int, Decimal]] = []
+        self.executed: list[tuple[int, str]] = []
+
+    def entry_margin_limit(self) -> Decimal:
+        return self.current
+
+    def create_entry_margin_limit_change(
+        self,
+        *,
+        user_id: int,
+        limit_usdt: Decimal,
+    ) -> EntryMarginLimitProposal:
+        self.proposed.append((user_id, limit_usdt))
+        return EntryMarginLimitProposal("marginnonce1", "confirm entry margin")
+
+    def execute_entry_margin_limit_confirmed(
+        self,
+        *,
+        user_id: int,
+        nonce: str,
+    ) -> str | None:
+        self.executed.append((user_id, nonce))
+        if nonce != "marginnonce1":
+            return None
+        self.current = self.proposed[-1][1]
+        return "entry margin changed"
+
+
 def _config(tmp_path: Path) -> TelegramBotFileConfig:
     token = tmp_path / "token"
     chats = tmp_path / "chats"
@@ -456,6 +490,10 @@ def test_contextual_inline_buttons_separate_navigation_from_dangerous_controls()
     leaders = contextual_inline_keyboard("leaders")["inline_keyboard"]
     leader_callbacks = [button["callback_data"] for row in leaders for button in row]
     assert "view:selection" in leader_callbacks
+
+    funds = contextual_inline_keyboard("funds")["inline_keyboard"]
+    fund_callbacks = [button["callback_data"] for row in funds for button in row]
+    assert "margin:manage" in fund_callbacks
 
     codex = contextual_inline_keyboard("codex")["inline_keyboard"]
     codex_callbacks = [button["callback_data"] for row in codex for button in row]
@@ -613,6 +651,21 @@ def test_multiplier_keyboards_bind_callbacks_to_leader_id_not_slot() -> None:
     assert "lead:remove:custom1" in manage_callbacks
     assert "lead:remove:custom2" in manage_callbacks
     assert "lock:manage" in manage_callbacks
+
+
+def test_entry_margin_keyboard_marks_current_and_offers_custom_input() -> None:
+    rows = entry_margin_limit_keyboard(Decimal("60"))["inline_keyboard"]
+    callbacks = [button["callback_data"] for row in rows for button in row]
+
+    assert callbacks[:4] == [
+        "margin:set:30",
+        "margin:set:60",
+        "margin:set:90",
+        "margin:set:120",
+    ]
+    assert rows[0][1]["text"] == "✅ 60 U"
+    assert "margin:custom" in callbacks
+    assert callbacks[-1] == "view:funds"
 
 
 def test_leader_lock_keyboard_binds_state_change_to_leader_id() -> None:
@@ -898,6 +951,129 @@ def test_multiplier_change_uses_authorization_and_two_step_confirmation(
     )
     assert len(calls) == before + 1
     assert admin.multiplier_proposed == [(42, "5109186975387420161", 5)]
+
+
+def test_entry_margin_change_requires_authorization_and_two_step_confirmation(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def transport(
+        path: str,
+        document: dict[str, object],
+        timeout: float,
+    ) -> TelegramHttpResult:
+        del timeout
+        method = path.rsplit("/", 1)[-1]
+        calls.append((method, document))
+        result: Any = (
+            True
+            if method == "answerCallbackQuery"
+            else {"message_id": int(document.get("message_id", 88))}
+        )
+        return TelegramHttpResult(200, json.dumps({"ok": True, "result": result}).encode())
+
+    admin = MarginAdmin()
+    router = TelegramMenuRouter(
+        client=TelegramBotClient(_config(tmp_path), transport=transport),
+        dashboard=Dashboard(),
+        challenges=Challenges(),
+        controls=Controls(),
+        margin_admin=admin,
+    )
+    message = {"message_id": 88, "chat": {"id": 42}}
+
+    router.handle(
+        {
+            "callback_query": {
+                "id": "denied",
+                "from": {"id": 99},
+                "data": "margin:set:60",
+                "message": message,
+            }
+        }
+    )
+    assert admin.proposed == []
+
+    for callback_id, data in (
+        ("manage", "margin:manage"),
+        ("set", "margin:set:60"),
+        ("confirm", "margin_confirm:marginnonce1"),
+    ):
+        router.handle(
+            {
+                "callback_query": {
+                    "id": callback_id,
+                    "from": {"id": 42},
+                    "data": data,
+                    "message": message,
+                }
+            }
+        )
+
+    assert admin.proposed == [(42, Decimal("60.00"))]
+    assert admin.executed == [(42, "marginnonce1")]
+    assert any(document.get("text") == "confirm entry margin" for _, document in calls)
+    assert calls[-1][1]["text"] == "entry margin changed"
+
+
+def test_entry_margin_custom_force_reply_and_command_validation(tmp_path: Path) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def transport(
+        path: str,
+        document: dict[str, object],
+        timeout: float,
+    ) -> TelegramHttpResult:
+        del timeout
+        method = path.rsplit("/", 1)[-1]
+        calls.append((method, document))
+        result: Any = True if method == "answerCallbackQuery" else {"message_id": 91}
+        return TelegramHttpResult(200, json.dumps({"ok": True, "result": result}).encode())
+
+    admin = MarginAdmin()
+    router = TelegramMenuRouter(
+        client=TelegramBotClient(_config(tmp_path), transport=transport),
+        dashboard=Dashboard(),
+        challenges=Challenges(),
+        controls=Controls(),
+        margin_admin=admin,
+    )
+    router.handle(
+        {
+            "callback_query": {
+                "id": "custom",
+                "from": {"id": 42},
+                "data": "margin:custom",
+                "message": {"message_id": 88, "chat": {"id": 42}},
+            }
+        }
+    )
+    prompt = str(calls[-1][1]["text"])
+    assert calls[-1][1]["reply_markup"]["force_reply"] is True  # type: ignore[index]
+
+    router.handle(
+        {
+            "message": {
+                "chat": {"id": 42},
+                "from": {"id": 42},
+                "text": "75.5",
+                "reply_to_message": {"text": prompt},
+            }
+        }
+    )
+    assert admin.proposed == [(42, Decimal("75.50"))]
+
+    router.handle(
+        {
+            "message": {
+                "chat": {"id": 42},
+                "from": {"id": 42},
+                "text": "/margin_limit 121",
+            }
+        }
+    )
+    assert "请输入 5-120 U" in str(calls[-1][1]["text"])
 
 
 def test_authorized_codex_audit_button_starts_real_audit(tmp_path: Path) -> None:

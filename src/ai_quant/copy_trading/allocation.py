@@ -7,11 +7,14 @@ from decimal import Decimal
 
 from ai_quant.copy_trading.models import NormalizedSignal, SignalKind
 
+DEFAULT_ENTRY_MARGIN_LIMIT_USDT = Decimal("120")
+MINIMUM_ENTRY_MARGIN_LIMIT_USDT = Decimal("5")
+
 
 @dataclass(frozen=True, slots=True)
 class PortfolioAllocationPolicy:
     operating_envelope_usdt: Decimal = Decimal("150")
-    entry_allocation_usdt: Decimal = Decimal("120")
+    entry_allocation_usdt: Decimal = DEFAULT_ENTRY_MARGIN_LIMIT_USDT
     reserve_usdt: Decimal = Decimal("30")
     default_leverage: int = 10
     maximum_leverage: int = 125
@@ -53,20 +56,35 @@ class PortfolioUsage:
     leader_committed_margin_usdt: Decimal
     symbol_committed_margin_usdt: Decimal
     account_available_balance_usdt: Decimal | None = None
+    configured_entry_margin_usdt: Decimal | None = None
 
     def __post_init__(self) -> None:
+        values = (
+            self.account_equity_usdt,
+            self.total_committed_margin_usdt,
+            self.leader_committed_margin_usdt,
+            self.symbol_committed_margin_usdt,
+            (
+                self.account_equity_usdt
+                if self.account_available_balance_usdt is None
+                else self.account_available_balance_usdt
+            ),
+            (
+                self.account_equity_usdt
+                if self.configured_entry_margin_usdt is None
+                else self.configured_entry_margin_usdt
+            ),
+        )
+        if not all(value.is_finite() for value in values):
+            raise ValueError("copy portfolio usage must be finite")
+        if self.configured_entry_margin_usdt is not None and not (
+            Decimal("0")
+            < self.configured_entry_margin_usdt
+            <= DEFAULT_ENTRY_MARGIN_LIMIT_USDT
+        ):
+            raise ValueError("copy configured entry margin is outside policy bounds")
         if (
-            min(
-                self.account_equity_usdt,
-                self.total_committed_margin_usdt,
-                self.leader_committed_margin_usdt,
-                self.symbol_committed_margin_usdt,
-                (
-                    self.account_equity_usdt
-                    if self.account_available_balance_usdt is None
-                    else self.account_available_balance_usdt
-                ),
-            )
+            min(values)
             < 0
         ):
             raise ValueError("copy portfolio usage cannot be negative")
@@ -149,11 +167,18 @@ class ProportionalAllocator:
         # smaller leader fill must never lower leverage and inflate margin for an
         # already-open position.
         default_leverage = maximum_leverage
-        # The owner-defined 120 USDT entry pool is a fixed shared allocation. Realized
-        # and unrealized PnL are already reflected in the logical account snapshot and
-        # must not shrink this pool a second time. Exchange available balance still
-        # protects the 30 USDT reserve independently below.
-        account_entry_capacity = self._policy.entry_allocation_usdt
+        # The owner-configured entry ceiling is shared across leaders and cannot exceed
+        # the 120 USDT policy boundary. Realized and unrealized PnL are already reflected
+        # in the logical account snapshot and must not shrink this ceiling a second time.
+        # Exchange available balance still protects the 30 USDT reserve independently.
+        account_entry_capacity = min(
+            self._policy.entry_allocation_usdt,
+            (
+                self._policy.entry_allocation_usdt
+                if usage.configured_entry_margin_usdt is None
+                else usage.configured_entry_margin_usdt
+            ),
+        )
         account_available_balance = (
             usage.account_equity_usdt
             if usage.account_available_balance_usdt is None

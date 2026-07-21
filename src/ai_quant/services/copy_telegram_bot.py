@@ -123,6 +123,7 @@ def main() -> int:
         controls=state,
         leader_admin=leader_admin,
         position_admin=state,
+        margin_admin=state,
         audit_trigger=_trigger_codex_audit,
     )
     signal.signal(signal.SIGTERM, _stop)

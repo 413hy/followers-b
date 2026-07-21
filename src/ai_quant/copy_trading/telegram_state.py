@@ -17,6 +17,10 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from ai_quant.copy_trading.allocation import (
+    DEFAULT_ENTRY_MARGIN_LIMIT_USDT,
+    MINIMUM_ENTRY_MARGIN_LIMIT_USDT,
+)
 from ai_quant.copy_trading.leader_slots import LeaderSlot, is_custom_slot, leader_slot_label
 from ai_quant.copy_trading.models import LeaderLifecycle
 from ai_quant.copy_trading.reason_text import (
@@ -31,6 +35,7 @@ from ai_quant.copy_trading.telegram_format import (
 )
 from ai_quant.notifications.telegram_bot import (
     ControlAction,
+    EntryMarginLimitProposal,
     FollowMultiplierProposal,
     LeaderCandidateChoice,
     LeaderChangeProposal,
@@ -1544,6 +1549,181 @@ class PostgresTelegramState:
             raise TelegramStateError("TELEGRAM_MULTIPLIER_CHANGE_WRITE_FAILED") from error
         return result_message
 
+    def entry_margin_limit(self) -> Decimal:
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                return _current_entry_margin_limit(cursor)
+        except psycopg.Error as error:
+            raise TelegramStateError("TELEGRAM_ENTRY_MARGIN_LIMIT_READ_FAILED") from error
+
+    def create_entry_margin_limit_change(
+        self,
+        *,
+        user_id: int,
+        limit_usdt: Decimal,
+    ) -> EntryMarginLimitProposal:
+        if user_id <= 0:
+            raise ValueError("Telegram entry margin user ID is invalid")
+        limit_usdt = _valid_entry_margin_limit(limit_usdt)
+        now = datetime.now(UTC)
+        nonce = secrets.token_urlsafe(12)
+        nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    ("copy-entry-margin-limit",),
+                )
+                current = _current_entry_margin_limit(cursor)
+                if current == limit_usdt:
+                    raise ValueError("Telegram entry margin limit is unchanged")
+                challenge_id = _digest(
+                    {
+                        "created_at": now.isoformat(),
+                        "limit_usdt": str(limit_usdt),
+                        "nonce_hash": nonce_hash,
+                        "user_id": user_id,
+                    }
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO copytrading.telegram_entry_margin_challenges(
+                      challenge_id,user_id,limit_usdt,nonce_hash,expires_at,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        challenge_id,
+                        user_id,
+                        limit_usdt,
+                        nonce_hash,
+                        now + timedelta(minutes=2),
+                        now,
+                    ),
+                )
+        except psycopg.Error as error:
+            raise TelegramStateError("TELEGRAM_ENTRY_MARGIN_CHALLENGE_WRITE_FAILED") from error
+        return EntryMarginLimitProposal(
+            nonce=nonce,
+            confirmation_text=(
+                "⚠️ 确认共享可用保证金额度\n"
+                f"{compact_money(current)} U → {compact_money(limit_usdt)} U\n\n"
+                "所有带单员共享此额度, 仅影响后续新开仓。已有仓位和待入场订单不会改量或强平; "
+                "若当前占用已超过新额度, 剩余额度按 0 U 处理, 等仓位释放后再允许开仓。\n"
+                "30 U 固定保留、单笔最多 5 U、交易所最大杠杆及带单员倍数均保持不变。"
+            ),
+        )
+
+    def execute_entry_margin_limit_confirmed(
+        self,
+        *,
+        user_id: int,
+        nonce: str,
+    ) -> str | None:
+        if user_id <= 0 or not 8 <= len(nonce) <= 32 or not nonce.isascii():
+            return None
+        now = datetime.now(UTC)
+        nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        result_message: str | None = None
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    (f"copy-entry-margin-limit:{nonce_hash}",),
+                )
+                cursor.execute(
+                    """
+                    SELECT challenge.challenge_id,challenge.limit_usdt
+                      FROM copytrading.telegram_entry_margin_challenges AS challenge
+                      LEFT JOIN copytrading.telegram_entry_margin_consumptions AS consumption
+                        USING(challenge_id)
+                     WHERE challenge.nonce_hash=%s AND challenge.user_id=%s
+                       AND challenge.expires_at>%s AND consumption.challenge_id IS NULL
+                    """,
+                    (nonce_hash, user_id, now),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                challenge_id = str(row["challenge_id"])
+                limit_usdt = _valid_entry_margin_limit(Decimal(str(row["limit_usdt"])))
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    ("copy-entry-margin-limit",),
+                )
+                current = _current_entry_margin_limit(cursor)
+                if current == limit_usdt:
+                    return None
+                cursor.execute(
+                    """
+                    INSERT INTO copytrading.telegram_entry_margin_consumptions(
+                      consumption_id,challenge_id,user_id,consumed_at
+                    ) VALUES (%s,%s,%s,%s)
+                    ON CONFLICT (challenge_id) DO NOTHING RETURNING consumption_id
+                    """,
+                    (
+                        _digest(
+                            {
+                                "challenge_id": challenge_id,
+                                "consumed_at": now.isoformat(),
+                            }
+                        ),
+                        challenge_id,
+                        user_id,
+                        now,
+                    ),
+                )
+                if cursor.fetchone() is None:
+                    return None
+                event_id = _digest(
+                    {
+                        "challenge_id": challenge_id,
+                        "limit_usdt": str(limit_usdt),
+                    }
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO copytrading.entry_margin_limit_events(
+                      limit_event_id,limit_usdt,actor_id,reason_codes,occurred_at
+                    ) VALUES (%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        event_id,
+                        limit_usdt,
+                        f"telegram:{user_id}",
+                        Jsonb(["TELEGRAM_ENTRY_MARGIN_LIMIT_SET"]),
+                        now,
+                    ),
+                )
+                result_message = (
+                    "✅ 共享可用保证金额度已更新\n"
+                    f"{compact_money(current)} U → {compact_money(limit_usdt)} U\n"
+                    "所有带单员后续新开仓立即共用新额度; 已有仓位和待入场订单保持不变。"
+                )
+                payload = {
+                    "event": "copy_entry_margin_limit_change",
+                    "previous_limit_usdt": str(current),
+                    "limit_usdt": str(limit_usdt),
+                    "state": "SUCCEEDED",
+                    "summary": result_message,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO control.outbox(
+                      message_id,deduplication_key,topic,payload,payload_hash
+                    ) VALUES (%s,%s,'copy.telegram',%s,%s)
+                    ON CONFLICT (deduplication_key) DO NOTHING
+                    """,
+                    (
+                        _digest({"entry_margin_limit_change": challenge_id}),
+                        f"copy-entry-margin-limit-change:{challenge_id}",
+                        Jsonb(payload),
+                        _digest(payload),
+                    ),
+                )
+        except psycopg.Error as error:
+            raise TelegramStateError("TELEGRAM_ENTRY_MARGIN_LIMIT_CHANGE_FAILED") from error
+        return result_message
+
     def leader_candidates(
         self,
         *,
@@ -2742,6 +2922,7 @@ class PostgresTelegramState:
                 (),
             )
             valuation = cursor.fetchone()
+            configured_entry_limit = _current_entry_margin_limit(cursor)
         operating_envelope = (
             Decimal(str(envelope["operating_envelope_usdt"]))
             if envelope
@@ -2755,7 +2936,6 @@ class PostgresTelegramState:
         committed = Decimal(str(usage["committed"])) if usage else Decimal("0")
         pending_margin = Decimal(str(pending["pending"])) if pending else Decimal("0")
         reserve = Decimal("30")
-        configured_entry_limit = Decimal("120")
         current_entry_limit = configured_entry_limit
         remaining = max(
             Decimal("0"),
@@ -2765,7 +2945,7 @@ class PostgresTelegramState:
             "💰 资金边界\n"
             "【额度规划】\n"
             f"当前交易净值: {compact_money(logical_equity)}U\n"
-            f"固定共享开仓池: {compact_money(current_entry_limit)}U"
+            f"共享可用保证金额度: {compact_money(current_entry_limit)}U"
             f" | 保留: {compact_money(reserve)}U\n"
             f"{_CARD_DIVIDER}\n"
             "【当前使用】\n"
@@ -3659,6 +3839,8 @@ def _notification_text_raw(
         return _safe_text(str(payload.get("summary", "带单员变更完成")), 1000)
     if payload.get("event") == "copy_leader_follow_multiplier_change":
         return _safe_text(str(payload.get("summary", "带单员跟单倍数变更完成")), 1000)
+    if payload.get("event") == "copy_entry_margin_limit_change":
+        return _safe_text(str(payload.get("summary", "共享可用保证金额度变更完成")), 1000)
     if payload.get("event") == "copy_leader_lock_change":
         summary = str(payload.get("summary", "带单员锁定状态变更完成"))
         return "\n".join(_safe_text(line, 500) for line in summary.splitlines())[:1000]
@@ -3956,7 +4138,7 @@ def _signal_reason_text(reason_codes: tuple[str, ...]) -> str:
         ),
         "COPY_SIZE_MARGIN_CAP_REACHED": "可用保证金容量不足, 本次没有下单",
         "COPY_SIZE_TOTAL_MARGIN_CAP_REACHED": (
-            "120 U 共享开仓池的剩余额度不足以满足最小下单量; "
+            "当前配置的共享可用保证金额度不足以满足最小下单量; "
             "已成交仓位和待入场订单都会占用额度, 本次没有下单"
         ),
         "COPY_SIZE_AVAILABLE_BALANCE_RESERVE_REACHED": (
@@ -4079,11 +4261,39 @@ def _notification_contextual_view(payload: Mapping[str, Any]) -> str | None:
         "copy_slot_replacement": "leaders",
         "copy_leader_manual_change": "leaders",
         "copy_leader_follow_multiplier_change": "leaders",
+        "copy_entry_margin_limit_change": "funds",
         "copy_leader_lock_change": "leaders",
         "copy_health": "health",
         "copy_runtime_control": "control",
         "copy_system": "status",
     }.get(str(payload.get("event")), "status")
+
+
+def _current_entry_margin_limit(cursor: psycopg.Cursor[dict[str, Any]]) -> Decimal:
+    cursor.execute(
+        """
+        SELECT limit_usdt FROM copytrading.entry_margin_limit_events
+         ORDER BY occurred_at DESC,limit_event_id DESC LIMIT 1
+        """,
+        (),
+    )
+    row = cursor.fetchone()
+    return (
+        _valid_entry_margin_limit(Decimal(str(row["limit_usdt"])))
+        if row is not None
+        else DEFAULT_ENTRY_MARGIN_LIMIT_USDT
+    )
+
+
+def _valid_entry_margin_limit(value: Decimal) -> Decimal:
+    quantum = Decimal("0.01")
+    if (
+        not value.is_finite()
+        or not MINIMUM_ENTRY_MARGIN_LIMIT_USDT <= value <= DEFAULT_ENTRY_MARGIN_LIMIT_USDT
+        or value != value.quantize(quantum)
+    ):
+        raise ValueError("Telegram entry margin limit is invalid")
+    return value.quantize(quantum)
 
 
 def _render_cards(title: str, cards: list[str], *, empty: str | None = None) -> str:

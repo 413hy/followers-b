@@ -14,7 +14,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ai_quant.copy_trading.allocation import PortfolioUsage
+from ai_quant.copy_trading.allocation import DEFAULT_ENTRY_MARGIN_LIMIT_USDT, PortfolioUsage
 from ai_quant.copy_trading.leader_slots import (
     CandidateActivity,
     LeaderSlot,
@@ -2582,10 +2582,21 @@ class CopyTradingRepository:
                            ),0) AS leader_margin,
                            coalesce(sum(committed_margin_usdt) FILTER (
                              WHERE symbol=%s
-                           ),0) AS symbol_margin
+                           ),0) AS symbol_margin,
+                           coalesce((
+                             SELECT limit_usdt
+                               FROM copytrading.entry_margin_limit_events
+                              ORDER BY occurred_at DESC,limit_event_id DESC LIMIT 1
+                           ),%s) AS configured_entry_margin
                       FROM usage
                     """,
-                    (symbol, current_symbol_leverage, lead_portfolio_id, symbol),
+                    (
+                        symbol,
+                        current_symbol_leverage,
+                        lead_portfolio_id,
+                        symbol,
+                        DEFAULT_ENTRY_MARGIN_LIMIT_USDT,
+                    ),
                 )
                 row = cursor.fetchone()
                 if row is None:
@@ -2598,6 +2609,7 @@ class CopyTradingRepository:
             leader_committed_margin_usdt=Decimal(str(row["leader_margin"])),
             symbol_committed_margin_usdt=Decimal(str(row["symbol_margin"])),
             account_available_balance_usdt=account_available_balance_usdt,
+            configured_entry_margin_usdt=Decimal(str(row["configured_entry_margin"])),
         )
 
     def ensure_envelope_baseline(

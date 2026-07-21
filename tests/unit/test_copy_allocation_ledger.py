@@ -65,6 +65,7 @@ def _usage(
     leader: str = "0",
     symbol: str = "0",
     available: str | None = None,
+    configured: str | None = None,
 ) -> PortfolioUsage:
     return PortfolioUsage(
         account_equity_usdt=Decimal(equity),
@@ -72,6 +73,9 @@ def _usage(
         leader_committed_margin_usdt=Decimal(leader),
         symbol_committed_margin_usdt=Decimal(symbol),
         account_available_balance_usdt=(None if available is None else Decimal(available)),
+        configured_entry_margin_usdt=(
+            None if configured is None else Decimal(configured)
+        ),
     )
 
 
@@ -404,6 +408,46 @@ def test_too_little_remaining_margin_is_reported_as_capacity_not_exchange_minimu
 
     assert not decision.approved
     assert decision.reason_codes == ("COPY_SIZE_TOTAL_MARGIN_CAP_REACHED",)
+
+
+def test_configured_shared_margin_limit_caps_future_entries() -> None:
+    decision = ProportionalAllocator().size_increase(
+        _signal(source_quantity="100"),
+        market_price=Decimal("2000"),
+        leader=LeaderAllocation(
+            lead_portfolio_id="5108371059752839168",
+            source_aum_usdt=Decimal("100000"),
+            portfolio_weight=Decimal("1"),
+        ),
+        usage=_usage(total="9.5", configured="10"),
+        rules=_rules(),
+    )
+
+    assert decision.approved
+    assert decision.committed_margin_usdt <= Decimal("0.5")
+
+
+def test_configured_limit_below_existing_usage_does_not_expand_or_force_usage() -> None:
+    decision = ProportionalAllocator().size_increase(
+        _signal(source_quantity="100"),
+        market_price=Decimal("2000"),
+        leader=LeaderAllocation(
+            lead_portfolio_id="5108371059752839168",
+            source_aum_usdt=Decimal("100000"),
+            portfolio_weight=Decimal("1"),
+        ),
+        usage=_usage(total="11", configured="10"),
+        rules=_rules(),
+    )
+
+    assert not decision.approved
+    assert decision.reason_codes == ("COPY_SIZE_TOTAL_MARGIN_CAP_REACHED",)
+
+
+@pytest.mark.parametrize("configured", ["NaN", "Infinity", "-1", "0", "121"])
+def test_invalid_configured_shared_margin_usage_is_rejected(configured: str) -> None:
+    with pytest.raises(ValueError, match="copy (portfolio usage|configured entry margin)"):
+        _usage(configured=configured)
 
 
 def test_large_existing_symbol_position_can_use_remaining_shared_capacity() -> None:

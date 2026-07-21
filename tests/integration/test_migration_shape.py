@@ -319,6 +319,24 @@ def test_persistent_protected_entry_migration_allows_gtc_claims() -> None:
     assert "reject_append_only_mutation" in migration
 
 
+def test_entry_margin_limit_is_bounded_two_step_and_append_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations/business/versions/0029_configurable_entry_margin.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "0029_entry_margin_limit"' in migration
+    assert 'down_revision = "0028_persistent_entries"' in migration
+    for table in (
+        "entry_margin_limit_events",
+        "telegram_entry_margin_challenges",
+        "telegram_entry_margin_consumptions",
+    ):
+        assert table in migration
+    assert "limit_usdt BETWEEN 5 AND 120" in migration
+    assert "control.reject_append_only_mutation()" in migration
+
+
 def test_copy_pnl_migration_has_account_and_per_leader_append_only_ledgers() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (root / "migrations/business/versions/0011_copy_account_valuations.py").read_text()

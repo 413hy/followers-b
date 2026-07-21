@@ -62,6 +62,7 @@ def test_telegram_environment_labels_are_explicit_and_validated() -> None:
         ("copy_codex_repair", "repair"),
         ("copy_slot_selection", "leaders"),
         ("copy_leader_follow_multiplier_change", "leaders"),
+        ("copy_entry_margin_limit_change", "funds"),
         ("copy_leader_lock_change", "leaders"),
         ("copy_health", "health"),
         ("unknown", "status"),
@@ -104,6 +105,25 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
     assert "已有仓位仍会占用保证金额度" in text
     assert "07-21 09:30:00" in text
     assert _notification_contextual_view(payload) is None
+
+
+def test_entry_margin_change_notification_is_explicit_and_returns_to_funds() -> None:
+    payload = {
+        "event": "copy_entry_margin_limit_change",
+        "previous_limit_usdt": "120",
+        "limit_usdt": "60",
+        "state": "SUCCEEDED",
+        "summary": (
+            "✅ 共享可用保证金额度已更新\n120 U → 60 U\n"
+            "所有带单员后续新开仓立即共用新额度; 已有仓位和待入场订单保持不变。"
+        ),
+    }
+
+    text = _notification_text(payload)
+
+    assert "120 U → 60 U" in text
+    assert "已有仓位和待入场订单保持不变" in text
+    assert _notification_contextual_view(payload) == "funds"
 
 
 def test_uncertain_entry_notification_keeps_pending_context() -> None:
