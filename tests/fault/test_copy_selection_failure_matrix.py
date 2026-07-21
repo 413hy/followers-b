@@ -726,3 +726,4 @@ def test_short_win_rate_codex_strategy_uses_win_rate_objective_without_activity_
 
     assert result.selected_leader_ids == (selected,)
     assert "highest credible win-rate" in prompts[0]
+    assert "current_copy_count as bounded supporting social proof" in prompts[0]

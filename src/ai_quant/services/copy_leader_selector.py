@@ -114,11 +114,14 @@ def _private_text(path: Path, repository_root: Path) -> str:
     return value
 
 
-def _short_win_rate_key(item: _ProfiledCandidate) -> tuple[Decimal, Decimal, int, Decimal]:
+def _short_win_rate_key(
+    item: _ProfiledCandidate,
+) -> tuple[Decimal, Decimal, int, int, Decimal]:
     quality = item.quality[SHORT_TERM_WIN_RATE]
     return (
         quality.score,
         item.leader.win_rate_pct,
+        item.leader.current_copy_count,
         item.activity.profitable_close_count,
         -item.leader.maximum_drawdown_pct,
     )
@@ -486,6 +489,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             short_2_pool.sort(
                 key=lambda item: (
                     item.quality[SHORT_TERM_INTRADAY].score,
+                    item.leader.current_copy_count,
                     item.activity.active_days_7d,
                     item.activity.orders_3d,
                     item.activity.orders_1d,
@@ -525,6 +529,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             short_2_pool.sort(
                 key=lambda item: (
                     item.quality[SHORT_TERM_INTRADAY].score,
+                    item.leader.current_copy_count,
                     item.activity.active_days_7d,
                     item.activity.orders_3d,
                     item.activity.orders_1d,

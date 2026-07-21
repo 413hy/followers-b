@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from ai_quant.copy_trading.codex_selection import CandidateOrderProfile
 from ai_quant.copy_trading.models import LeaderSnapshot
+from ai_quant.copy_trading.selection import copy_social_proof_score
 
 LONG_TERM = "LONG_TERM"
 SHORT_TERM_WIN_RATE = "SHORT_TERM_WIN_RATE"
@@ -24,6 +25,7 @@ class SelectionQualityAssessment:
     warning_codes: tuple[str, ...]
     track_record_days: int
     confidence_cap: str
+    copy_social_proof_score: Decimal
 
     def document(self) -> dict[str, object]:
         return {
@@ -33,6 +35,7 @@ class SelectionQualityAssessment:
             "warning_codes": list(self.warning_codes),
             "track_record_days": self.track_record_days,
             "confidence_cap": self.confidence_cap,
+            "copy_social_proof_score": str(self.copy_social_proof_score),
         }
 
 
@@ -210,6 +213,7 @@ def assess_selection_quality(
         warning_codes=tuple(dict.fromkeys(warnings)),
         track_record_days=track_record_days,
         confidence_cap=confidence_cap,
+        copy_social_proof_score=copy_social_proof_score(leader.current_copy_count),
     )
 
 
@@ -246,36 +250,40 @@ def _selection_score(
         * Decimal("100")
     )
     track_record = _bounded(Decimal(track_record_days) / Decimal("90") * Decimal("100"))
+    social_proof = copy_social_proof_score(leader.current_copy_count)
     if objective == LONG_TERM:
         score = (
-            drawdown * Decimal("0.25")
+            drawdown * Decimal("0.22")
             + close_rate * Decimal("0.15")
-            + profit_factor * Decimal("0.15")
-            + concentration * Decimal("0.20")
-            + track_record * Decimal("0.15")
-            + sample_size * Decimal("0.10")
+            + profit_factor * Decimal("0.13")
+            + concentration * Decimal("0.18")
+            + track_record * Decimal("0.13")
+            + sample_size * Decimal("0.09")
+            + social_proof * Decimal("0.10")
         )
     elif objective == SHORT_TERM_WIN_RATE:
         score = (
-            _bounded(leader.win_rate_pct) * Decimal("0.30")
-            + close_rate * Decimal("0.25")
-            + drawdown * Decimal("0.15")
-            + concentration * Decimal("0.15")
-            + profit_factor * Decimal("0.10")
+            _bounded(leader.win_rate_pct) * Decimal("0.28")
+            + close_rate * Decimal("0.23")
+            + drawdown * Decimal("0.14")
+            + concentration * Decimal("0.13")
+            + profit_factor * Decimal("0.09")
             + sample_size * Decimal("0.05")
+            + social_proof * Decimal("0.08")
         )
     else:
         recent_health = _recent_health_score(profile)
         activity = _activity_score(profile)
         score = (
-            close_rate * Decimal("0.15")
-            + _bounded(leader.win_rate_pct) * Decimal("0.08")
-            + drawdown * Decimal("0.22")
-            + concentration * Decimal("0.20")
+            close_rate * Decimal("0.14")
+            + _bounded(leader.win_rate_pct) * Decimal("0.07")
+            + drawdown * Decimal("0.20")
+            + concentration * Decimal("0.18")
             + profit_factor * Decimal("0.10")
             + recent_health * Decimal("0.08")
             + track_record * Decimal("0.07")
-            + activity * Decimal("0.10")
+            + activity * Decimal("0.09")
+            + social_proof * Decimal("0.07")
         )
     score -= _trend_penalty(trend)
     if objective in {SHORT_TERM_WIN_RATE, SHORT_TERM_INTRADAY}:

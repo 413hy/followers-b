@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from ai_quant.copy_trading.codex_selection import CandidateOrderProfile
+from ai_quant.copy_trading.codex_selection import CandidateOrderProfile, candidate_document
 from ai_quant.copy_trading.models import LeaderSnapshot, PublicLeaderOrder
+from ai_quant.copy_trading.selection import assess_candidate, copy_social_proof_score
 from ai_quant.copy_trading.selection_quality import (
     LONG_TERM,
     SHORT_TERM_INTRADAY,
@@ -14,7 +15,12 @@ from ai_quant.copy_trading.selection_quality import (
 )
 
 
-def _leader(*, win_rate: str = "82.14", drawdown: str = "16.06") -> LeaderSnapshot:
+def _leader(
+    *,
+    win_rate: str = "82.14",
+    drawdown: str = "16.06",
+    current_copy_count: int = 10,
+) -> LeaderSnapshot:
     now = datetime.now(UTC)
     return LeaderSnapshot(
         lead_portfolio_id="5109186975387420161",
@@ -24,8 +30,8 @@ def _leader(*, win_rate: str = "82.14", drawdown: str = "16.06") -> LeaderSnapsh
         aum_usdt=Decimal("50000"),
         maximum_drawdown_pct=Decimal(drawdown),
         win_rate_pct=Decimal(win_rate),
-        current_copy_count=10,
-        maximum_copy_count=100,
+        current_copy_count=current_copy_count,
+        maximum_copy_count=max(100, current_copy_count),
         start_time_ms=int((now - timedelta(days=60)).timestamp() * 1000),
         portfolio_type="PUBLIC",
         raw_payload_hash="a" * 64,
@@ -85,7 +91,7 @@ def test_intraday_gate_rejects_busy_leader_whose_profit_depends_on_two_winners()
     )
 
     assessment = assess_selection_quality(
-        _leader(),
+        _leader(current_copy_count=400),
         profile,
         objective=SHORT_TERM_INTRADAY,
         observed_at_ms=now_ms,
@@ -116,6 +122,50 @@ def test_repeatable_close_profile_passes_all_three_objective_gates() -> None:
 
     assert all(assessment.eligible for assessment in assessments)
     assert all(assessment.score > Decimal("60") for assessment in assessments)
+
+
+def test_established_copy_following_adds_bounded_social_proof_to_all_scores() -> None:
+    pnls = tuple("-2" if index in {4, 9, 14, 19} else "5" for index in range(36))
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    profile = CandidateOrderProfile.from_orders(
+        _close_orders(pnls),
+        observed_at_ms=now_ms,
+    )
+    quiet = _leader(win_rate="85", drawdown="5", current_copy_count=10)
+    established = _leader(win_rate="85", drawdown="5", current_copy_count=600)
+
+    assert copy_social_proof_score(10) < copy_social_proof_score(400)
+    assert copy_social_proof_score(400) < copy_social_proof_score(600) == Decimal("100")
+    assert assess_candidate(established, observed_at_ms=now_ms).deterministic_score > (
+        assess_candidate(quiet, observed_at_ms=now_ms).deterministic_score
+    )
+    for objective in (LONG_TERM, SHORT_TERM_WIN_RATE, SHORT_TERM_INTRADAY):
+        quiet_quality = assess_selection_quality(
+            quiet,
+            profile,
+            objective=objective,
+            observed_at_ms=now_ms,
+        )
+        established_quality = assess_selection_quality(
+            established,
+            profile,
+            objective=objective,
+            observed_at_ms=now_ms,
+        )
+
+        assert established_quality.score > quiet_quality.score
+        assert established_quality.copy_social_proof_score == Decimal("100.000000")
+
+    document = candidate_document(
+        established,
+        assess_candidate(established, observed_at_ms=now_ms),
+        profile,
+        execution_trading_symbols=frozenset({"ETHUSDT"}),
+        execution_environment="TESTNET",
+    )
+    assert document["current_copy_count"] == 600
+    assert document["maximum_copy_count"] == 600
+    assert document["copy_social_proof_score"] == "100.000000"
 
 
 def test_fast_public_drawdown_and_roi_deterioration_downranks_candidate() -> None:

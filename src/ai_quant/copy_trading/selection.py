@@ -62,12 +62,14 @@ def assess_candidate(
         Decimal("100"),
         (Decimal(track_record_days) / Decimal("90")) * Decimal("100"),
     )
+    social_proof_component = copy_social_proof_score(leader.current_copy_count)
     score = (
-        leader.win_rate_pct * Decimal("0.35")
-        + drawdown_component * Decimal("0.30")
-        + roi_component * Decimal("0.20")
-        + aum_component * Decimal("0.10")
+        leader.win_rate_pct * Decimal("0.32")
+        + drawdown_component * Decimal("0.28")
+        + roi_component * Decimal("0.18")
+        + aum_component * Decimal("0.07")
         + track_component * Decimal("0.05")
+        + social_proof_component * Decimal("0.10")
     ).quantize(Decimal("0.000001"))
     return CandidateAssessment(
         lead_portfolio_id=leader.lead_portfolio_id,
@@ -75,3 +77,17 @@ def assess_candidate(
         deterministic_score=score,
         reason_codes=tuple(reasons),
     )
+
+
+def copy_social_proof_score(current_copy_count: int) -> Decimal:
+    """Return bounded, diminishing social proof from the current copier count."""
+
+    if current_copy_count < 0:
+        raise ValueError("copy follower count is invalid")
+    # Six hundred current copiers is already strong social proof. A square-root curve
+    # recognizes smaller established followings without allowing a saturated quota to
+    # dominate drawdown, close quality, or recent performance.
+    return min(
+        Decimal("100"),
+        Decimal(current_copy_count).sqrt() / Decimal("600").sqrt() * Decimal("100"),
+    ).quantize(Decimal("0.000001"))

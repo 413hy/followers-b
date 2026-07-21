@@ -3512,7 +3512,10 @@ class PostgresTelegramState:
             "🤖 Codex 最近选人依据\n"
             f"时间: {_display_shanghai_time(row['occurred_at'])}\n"
             f"批次: {str(row['selection_run_id'])[:12]}\n"
-            f"报告校验: {str(row['codex_report_digest'])[:12]}"
+            f"报告校验: {str(row['codex_report_digest'])[:12]}\n"
+            "当前策略: 跟单人数作为边际递减的市场认可度加分; "
+            "长线/短线1/短线2分别占综合分10%/8%/7%, "
+            "但不能覆盖回撤、盈亏质量、样本和活跃度门槛。"
         )
 
     def _control(self) -> str:
