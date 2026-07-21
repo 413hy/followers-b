@@ -404,12 +404,16 @@ class CopyTradingRuntime:
                 return
         try:
             rules = self._symbol_rules(signal.symbol)
-            # Binance validates a LIMIT order's minimum notional at its actual limit price, not
-            # at the current book ticker. Size against that same protected price so a slightly
-            # better source limit cannot make an otherwise valid quantity fall below the exchange
-            # minimum. The matching engine still fills immediately at the current better price.
+            # Binance validates minimum notional and its dynamic price band against the actual
+            # submitted limit. Use the live opposing quote whenever it is no worse than the
+            # source fill; submitting a far-away marketable source limit can otherwise be
+            # rejected before it reaches the matching engine.
             entry_limit_price = (
-                protected_entry_price(signal, rules.price_tick)
+                protected_entry_price(
+                    signal,
+                    rules.price_tick,
+                    market_price=self._market_price(signal),
+                )
                 if signal.kind is SignalKind.INCREASE
                 else None
             )

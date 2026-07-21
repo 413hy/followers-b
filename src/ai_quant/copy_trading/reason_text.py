@@ -30,6 +30,10 @@ _LABELS = {
     "COPY_ORDER_EXPIRED": "交易所确认订单已过期",
     "COPY_ORDER_REJECTED": "交易所拒绝了订单",
     "COPY_ORDER_REJECTED_BY_EXCHANGE": "交易所拒绝了本次下单",
+    "COPY_EXCHANGE_CODE_4016": (
+        "提交限价高于 Binance 当时允许的动态价格上限; "
+        "订单在进入撮合前已被拒绝, 没有成交或仓位残留"
+    ),
     "COPY_ORDER_NOTIONAL_BELOW_EXCHANGE_MINIMUM": "订单金额低于交易所最小下单要求",
     "COPY_ORDER_PARTIAL_PENDING": "订单已部分成交, 剩余数量仍在等待成交",
     "COPY_ORDER_PARTIAL_TERMINAL": "订单部分成交后已经终止, 系统只按实际成交量记账",

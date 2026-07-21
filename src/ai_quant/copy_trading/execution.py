@@ -763,8 +763,18 @@ def copy_client_order_id(
     return f"{prefix}-{signal_id[:28]}"
 
 
-def protected_entry_price(signal: NormalizedSignal, price_tick: Decimal) -> Decimal:
-    """Round the source fill into a no-worse executable limit for this entry side."""
+def protected_entry_price(
+    signal: NormalizedSignal,
+    price_tick: Decimal,
+    *,
+    market_price: Decimal | None = None,
+) -> Decimal:
+    """Return a no-worse limit, using the live book when it is more favorable.
+
+    A far-away source limit can violate Binance's dynamic percent-price band even
+    when it is marketable. In that case the matching engine would have filled at
+    the better live price, but the gateway rejects the raw limit before matching.
+    """
     if signal.kind is not SignalKind.INCREASE:
         raise ValueError("copy protected price requires an increase signal")
     if not price_tick.is_finite() or price_tick <= 0:
@@ -775,6 +785,19 @@ def protected_entry_price(signal: NormalizedSignal, price_tick: Decimal) -> Deci
         price += price_tick
     if price <= 0:
         raise ValueError("copy protected price is below one exchange tick")
+    if market_price is None:
+        return price
+    if not market_price.is_finite() or market_price <= 0:
+        raise ValueError("copy protected market price is invalid")
+    market_steps = market_price // price_tick
+    market_limit = market_steps * price_tick
+    if exchange_order_side(signal) == "BUY":
+        if market_limit < market_price:
+            market_limit += price_tick
+        if market_limit <= price:
+            return market_limit
+    elif market_limit >= price:
+        return market_limit
     return price
 
 

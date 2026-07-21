@@ -651,6 +651,10 @@ WITH lifecycle AS (
   SELECT DISTINCT ON (signal_id) signal_id,state,occurred_at
     FROM copytrading.signal_decision_events
    ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
+), latest_submission AS (
+  SELECT DISTINCT ON (signal_id) signal_id,state
+    FROM copytrading.submission_events
+   ORDER BY signal_id,occurred_at DESC,submission_event_id DESC
 ), latest_replacement AS (
   SELECT DISTINCT ON (replacement_id) replacement_id,state,expires_at
     FROM copytrading.slot_replacement_events
@@ -677,8 +681,14 @@ SELECT (SELECT count(*) FROM active) AS active_leaders,
        (SELECT count(*) FROM latest_decision
          WHERE state='UNCERTAIN' AND occurred_at<now()-interval '2 minutes')
          AS uncertain_signals,
-       (SELECT count(*) FROM latest_decision
-         WHERE state='FAILED' AND occurred_at>=now()-interval '1 hour')
+       (SELECT count(*) FROM latest_decision AS decision
+         WHERE decision.state='FAILED'
+           AND decision.occurred_at>=now()-interval '1 hour'
+           AND NOT EXISTS (
+             SELECT 1 FROM latest_submission AS submission
+              WHERE submission.signal_id=decision.signal_id
+                AND submission.state='REJECTED'
+           ))
          AS failed_signals_last_hour,
        (SELECT count(*) FROM latest_decision
          WHERE state='IGNORED_MINIMUM'

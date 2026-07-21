@@ -25,6 +25,11 @@ def test_removed_execution_reconciliation_window_is_not_in_health_query() -> Non
     assert "occurred_at>coalesce" not in _FACTS_SQL
 
 
+def test_safe_terminal_exchange_rejections_do_not_repeat_as_watchdog_failures() -> None:
+    assert "latest_submission AS" in _FACTS_SQL
+    assert "submission.state='REJECTED'" in _FACTS_SQL
+
+
 def test_pending_entry_allowance_tracks_protected_order_expiry_not_claim_age() -> None:
     assert "claim.expires_at>now()-interval '2 minutes'" in _PENDING_ENTRY_ALLOWANCE_SQL
     assert "claim.claimed_at>now()-interval '2 minutes'" not in _PENDING_ENTRY_ALLOWANCE_SQL

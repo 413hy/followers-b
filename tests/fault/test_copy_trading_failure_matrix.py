@@ -1408,11 +1408,8 @@ def test_reduction_does_not_depend_on_book_ticker_availability() -> None:
     assert repository.decisions[-1][1] == "FILLED"
 
 
-def test_entry_sizes_minimum_notional_at_submitted_limit_without_ticker_query() -> None:
+def test_entry_sizes_minimum_notional_at_submitted_limit_when_market_is_worse() -> None:
     class ProtectedLimitExchange(FakeExchange):
-        def book_ticker(self, symbol: str) -> dict[str, Any]:
-            raise AssertionError(f"entry unexpectedly requested ticker for {symbol}")
-
         def exchange_info(self) -> dict[str, Any]:
             document = super().exchange_info()
             filters = document["symbols"][0]["filters"]
@@ -1443,6 +1440,23 @@ def test_entry_sizes_minimum_notional_at_submitted_limit_without_ticker_query() 
     assert order.limit_price == Decimal("1815.51")
     assert order.local_quantity == Decimal("0.012")
     assert order.local_quantity * order.limit_price >= Decimal("20")
+
+
+def test_entry_submits_live_better_limit_instead_of_far_away_source_price() -> None:
+    class BetterMarketExchange(FakeExchange):
+        def book_ticker(self, symbol: str) -> dict[str, Any]:
+            assert symbol == "ETHUSDT"
+            return {"askPrice": "1800.001", "bidPrice": "1800.000"}
+
+    signal = replace(_signal(), reference_price=Decimal("2000"))
+    repository = FakeRepository(assignments=(_assignment(),), ingested=(signal,))
+    executor = FakeExecutor()
+
+    _runtime(repository, FakePublic(), executor, exchange=BetterMarketExchange()).run_cycle()
+
+    order = executor.orders[0]
+    assert order.limit_price == Decimal("1800.01")
+    assert order.limit_price < signal.reference_price
 
 
 def test_new_entry_uses_only_its_assigned_leader_multiplier() -> None:

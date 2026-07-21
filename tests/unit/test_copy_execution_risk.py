@@ -266,6 +266,32 @@ def test_protected_entry_price_never_rounds_to_a_worse_source_price() -> None:
     ) == Decimal("2000.02")
 
 
+def test_protected_entry_price_uses_live_quote_when_market_is_better() -> None:
+    assert protected_entry_price(
+        _signal(side=PositionSide.LONG, reference_price="0.1659499"),
+        Decimal("0.00001"),
+        market_price=Decimal("0.154321"),
+    ) == Decimal("0.15433")
+    assert protected_entry_price(
+        _signal(side=PositionSide.SHORT, reference_price="90.451"),
+        Decimal("0.01"),
+        market_price=Decimal("94.729"),
+    ) == Decimal("94.72")
+
+
+def test_protected_entry_price_keeps_source_limit_when_market_is_worse() -> None:
+    assert protected_entry_price(
+        _signal(side=PositionSide.LONG, reference_price="100"),
+        Decimal("0.01"),
+        market_price=Decimal("101"),
+    ) == Decimal("100")
+    assert protected_entry_price(
+        _signal(side=PositionSide.SHORT, reference_price="100"),
+        Decimal("0.01"),
+        market_price=Decimal("99"),
+    ) == Decimal("100")
+
+
 def test_entry_uses_gtd_protected_limit_with_durable_expiry() -> None:
     client = FakeClient()
     journal = FakeJournal()
