@@ -97,6 +97,43 @@ def main() -> int:
     repository = CopyTradingRepository(dsn)
     telegram = PostgresTelegramState(dsn)
 
+    repository.record_account_valuation(
+        exchange_wallet_balance_usdt=Decimal("5000"),
+        exchange_margin_balance_usdt=Decimal("5000"),
+        exchange_available_balance_usdt=Decimal("5000"),
+        envelope_baseline_usdt=Decimal("5000"),
+        operating_envelope_usdt=Decimal("150"),
+        total_initial_margin_usdt=Decimal("0"),
+        total_maintenance_margin_usdt=Decimal("0"),
+        observed_at=NOW,
+    )
+    capital_reset_at = NOW + timedelta(seconds=1)
+    capital_reset_id = repository.reset_pnl_baseline(
+        actor_id="integration-test",
+        occurred_at=capital_reset_at,
+    )
+    assert len(capital_reset_id) == 64
+    assert repository.ensure_envelope_baseline(
+        exchange_margin_balance_usdt=Decimal("4900"),
+        operating_envelope_usdt=Decimal("150"),
+        occurred_at=capital_reset_at + timedelta(seconds=1),
+    ) == Decimal("5000")
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT event_type,operating_envelope_usdt,exchange_margin_balance_usdt,
+                   reason_codes
+              FROM copytrading.account_envelope_events
+             ORDER BY occurred_at DESC,envelope_event_id DESC LIMIT 1
+            """
+        )
+        assert cursor.fetchone() == (
+            "RESET",
+            Decimal("150"),
+            Decimal("5000"),
+            ["COPY_ACCOUNT_ENVELOPE_RESET"],
+        )
+
     source_leader = LeaderSnapshot.from_api(
         {
             "leadPortfolioId": LEADER_ID,
@@ -771,7 +808,6 @@ def main() -> int:
         total_maintenance_margin_usdt=Decimal("0"),
         observed_at=trade_at + timedelta(seconds=3),
     )
-
     telegram.record_update(
         {"update_id": 7, "message": {"text": "/status"}},
         chat_id=42,
@@ -879,7 +915,7 @@ def main() -> int:
         leader.lead_portfolio_id,
     )
     notifications = telegram.claim_notifications()
-    assert len(notifications) == 15, [item.text for item in notifications]
+    assert len(notifications) == 17, [item.text for item in notifications]
     assert any("source integration leader" in item.text for item in notifications)
     assert any("database integration leader" in item.text for item in notifications)
     assert any("3倍" in item.text for item in notifications)
@@ -889,6 +925,7 @@ def main() -> int:
     assert any("已锁定" in item.text for item in notifications)
     assert any("已解锁" in item.text for item in notifications)
     assert any("本轮自动换人已取消" in item.text for item in notifications)
+    assert any("交易资金净值已恢复为 150 U" in item.text for item in notifications)
     for notification in notifications:
         telegram.complete_notification(notification.message_id, delivered=True)
 

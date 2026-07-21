@@ -39,8 +39,8 @@ The exact startup order, secret files and acceptance checks are documented in
 - Existing source history is baselined, never replayed as new trades.
 - An uncertain submission is reconciled by the original client order ID, never blindly duplicated.
 - Reductions affect only the corresponding leader-owned quantity.
-- Account, line, leader and position PnL raw events remain append-only; presentation resets append a
-  new baseline instead of deleting history.
+- Account, line, leader and position PnL raw events remain append-only; an operator reset appends
+  both a logical-capital envelope baseline and PnL presentation baseline instead of deleting history.
 - Runtime credentials, database dumps, logs, browser state, Codex auth and account evidence remain
   outside Git.
 

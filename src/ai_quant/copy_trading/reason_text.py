@@ -10,6 +10,9 @@ _LABELS = {
     "COPY_PNL_PRESENTATION_RESET": (
         "盈亏统计已从本次操作时间重新计为零, 仓位、订单和历史审计记录未修改"
     ),
+    "COPY_ACCOUNT_ENVELOPE_RESET": (
+        "交易资金净值已恢复到初始操作额度, 此后的盈亏和开仓容量从新基线计算"
+    ),
     "COPY_PROTECTED_LIMIT_CANCELLED_BY_SOURCE_REDUCTION": (
         "带单员在本系统入场前已减仓或平仓, 未成交的入场限价单已安全取消, 本次不会建立仓位"
     ),

@@ -94,7 +94,7 @@ class CopyTradingRepository:
         actor_id: str,
         occurred_at: datetime,
     ) -> str:
-        """Reset PnL presentation without mutating orders, positions, or audit history."""
+        """Rebase logical capital and PnL without mutating orders or positions."""
 
         _require_utc(occurred_at)
         if not actor_id or len(actor_id) > 128 or "\n" in actor_id or "\r" in actor_id:
@@ -106,8 +106,13 @@ class CopyTradingRepository:
                     ("copy-pnl-reset",),
                 )
                 cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    ("copy-account-envelope",),
+                )
+                cursor.execute(
                     """
-                    SELECT valuation_event_id,observed_at
+                    SELECT valuation_event_id,observed_at,
+                           exchange_margin_balance_usdt,operating_envelope_usdt
                       FROM copytrading.account_valuation_events
                      ORDER BY observed_at DESC,valuation_event_id DESC LIMIT 1
                      FOR SHARE
@@ -123,6 +128,17 @@ class CopyTradingRepository:
                 ) > timedelta(minutes=2):
                     raise CopyRepositoryError("COPY_PNL_RESET_VALUATION_STALE")
                 valuation_event_id = str(anchor["valuation_event_id"])
+                exchange_margin_balance_usdt = Decimal(
+                    str(anchor["exchange_margin_balance_usdt"])
+                )
+                operating_envelope_usdt = Decimal(str(anchor["operating_envelope_usdt"]))
+                if (
+                    not exchange_margin_balance_usdt.is_finite()
+                    or exchange_margin_balance_usdt < 0
+                    or not operating_envelope_usdt.is_finite()
+                    or operating_envelope_usdt <= 0
+                ):
+                    raise CopyRepositoryError("COPY_PNL_RESET_VALUATION_INVALID")
                 cursor.execute(
                     """
                     WITH latest AS (
@@ -165,6 +181,29 @@ class CopyTradingRepository:
                         valuation_event_id,
                         actor_id,
                         Jsonb(["COPY_PNL_PRESENTATION_RESET"]),
+                        occurred_at,
+                    ),
+                )
+                envelope_event_id = _digest(
+                    {
+                        "exchange_margin_balance_usdt": str(exchange_margin_balance_usdt),
+                        "operating_envelope_usdt": str(operating_envelope_usdt),
+                        "reset_event_id": reset_event_id,
+                        "type": "copy-account-envelope-reset",
+                    }
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO copytrading.account_envelope_events(
+                      envelope_event_id,event_type,operating_envelope_usdt,
+                      exchange_margin_balance_usdt,reason_codes,occurred_at
+                    ) VALUES (%s,'RESET',%s,%s,%s,%s)
+                    """,
+                    (
+                        envelope_event_id,
+                        operating_envelope_usdt,
+                        exchange_margin_balance_usdt,
+                        Jsonb(["COPY_ACCOUNT_ENVELOPE_RESET"]),
                         occurred_at,
                     ),
                 )
@@ -230,11 +269,16 @@ class CopyTradingRepository:
                     "event": "copy_pnl_reset",
                     "state": "RESET",
                     "occurred_at": occurred_at.isoformat(),
-                    "reason_codes": ["COPY_PNL_PRESENTATION_RESET"],
+                    "operating_envelope_usdt": str(operating_envelope_usdt),
+                    "reason_codes": [
+                        "COPY_PNL_PRESENTATION_RESET",
+                        "COPY_ACCOUNT_ENVELOPE_RESET",
+                    ],
                     "summary": (
-                        "当前净值已按初始 150 U 重新计算; 系统总盈亏、各条线、"
+                        "交易资金净值已按初始额度重新计算; 系统总盈亏、各条线、"
                         "各带单员及当前仓位的盈亏统计已从现在重新计为 0; "
-                        "当前仓位、订单、带单员配置和历史审计记录均未修改"
+                        "当前仓位、订单、带单员配置和历史审计记录均未修改, "
+                        "已有仓位仍会正常占用保证金额度"
                     ),
                 }
                 payload_hash = _digest(payload)

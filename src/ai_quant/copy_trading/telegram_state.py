@@ -2696,24 +2696,77 @@ class PostgresTelegramState:
                 """
                 WITH latest AS (
                   SELECT DISTINCT ON (lead_portfolio_id,symbol,position_side)
-                         committed_margin_usdt
+                         resulting_local_quantity,committed_margin_usdt
                     FROM copytrading.virtual_position_events
                    ORDER BY lead_portfolio_id,symbol,position_side,
                             occurred_at DESC,position_event_id DESC
-                ) SELECT coalesce(sum(committed_margin_usdt),0) AS committed FROM latest
+                ) SELECT coalesce(sum(committed_margin_usdt) FILTER (
+                           WHERE resulting_local_quantity>0
+                         ),0) AS committed FROM latest
                 """,
                 (),
             )
             usage = cursor.fetchone()
-        committed = usage["committed"] if usage else 0
+            cursor.execute(
+                """
+                WITH latest_decision AS (
+                  SELECT DISTINCT ON (signal_id) signal_id,state
+                    FROM copytrading.signal_decision_events
+                   ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
+                )
+                SELECT coalesce(sum(
+                         claim.requested_quantity*claim.limit_price/claim.leverage
+                       ) FILTER (WHERE decision.state IN ('SUBMITTED','UNCERTAIN')),0)
+                         AS pending
+                  FROM copytrading.submission_claims AS claim
+                  JOIN latest_decision AS decision USING(signal_id)
+                 WHERE claim.order_type='LIMIT'
+                """,
+                (),
+            )
+            pending = cursor.fetchone()
+            cursor.execute(
+                """
+                SELECT logical_equity_usdt
+                  FROM copytrading.account_valuation_events
+                 ORDER BY observed_at DESC,valuation_event_id DESC LIMIT 1
+                """,
+                (),
+            )
+            valuation = cursor.fetchone()
+        operating_envelope = (
+            Decimal(str(envelope["operating_envelope_usdt"]))
+            if envelope
+            else Decimal("150")
+        )
+        logical_equity = (
+            Decimal(str(valuation["logical_equity_usdt"]))
+            if valuation
+            else operating_envelope
+        )
+        committed = Decimal(str(usage["committed"])) if usage else Decimal("0")
+        pending_margin = Decimal(str(pending["pending"])) if pending else Decimal("0")
+        reserve = Decimal("30")
+        configured_entry_limit = Decimal("120")
+        current_entry_limit = min(
+            configured_entry_limit,
+            max(Decimal("0"), logical_equity - reserve),
+        )
+        remaining = max(
+            Decimal("0"),
+            current_entry_limit - committed - pending_margin,
+        )
         return (
             "💰 资金边界\n"
             "【额度规划】\n"
-            "逻辑操作额度: 150U\n"
-            "可分配: 120U | 保留: 30U\n"
+            f"当前交易净值: {compact_money(logical_equity)}U\n"
+            f"开仓保证金总上限: {compact_money(current_entry_limit)}U"
+            f" | 保留: {compact_money(reserve)}U\n"
             f"{_CARD_DIVIDER}\n"
-            "【当前占用】\n"
-            f"当前虚拟保证金: {compact_money(committed)}U\n"
+            "【当前使用】\n"
+            f"已成交仓位占用: {compact_money(committed)}U\n"
+            f"待入场订单预留: {compact_money(pending_margin)}U\n"
+            f"剩余可开仓保证金: {compact_money(remaining)}U\n"
             "账户基线: "
             f"{compact_money(envelope['exchange_margin_balance_usdt']) if envelope else '待建立'}U"
         )
@@ -2738,13 +2791,31 @@ class PostgresTelegramState:
                   SELECT valuation.*
                     FROM copytrading.account_valuation_events AS valuation
                     JOIN reset USING(valuation_event_id)
+                ), envelope_reset AS (
+                  SELECT envelope.exchange_margin_balance_usdt
+                    FROM copytrading.account_envelope_events AS envelope
+                    JOIN reset ON reset.occurred_at=envelope.occurred_at
+                   WHERE envelope.event_type='RESET'
+                   ORDER BY envelope.envelope_event_id DESC LIMIT 1
+                ), account_anchor AS (
+                  SELECT CASE WHEN envelope_reset.exchange_margin_balance_usdt IS NOT NULL
+                              THEN reset_anchor.exchange_wallet_balance_usdt
+                                   - envelope_reset.exchange_margin_balance_usdt
+                              ELSE reset_anchor.realized_net_pnl_usdt END
+                           AS realized_net_pnl_usdt,
+                         reset_anchor.unrealized_pnl_usdt,
+                         CASE WHEN envelope_reset.exchange_margin_balance_usdt IS NOT NULL
+                              THEN 0 ELSE reset_anchor.total_pnl_usdt END
+                           AS total_pnl_usdt
+                    FROM reset_anchor
+                    LEFT JOIN envelope_reset ON true
                 )
                 SELECT latest.*,
-                       coalesce(reset_anchor.realized_net_pnl_usdt,0)
+                       coalesce(account_anchor.realized_net_pnl_usdt,0)
                          AS reset_realized_net_pnl_usdt,
-                       coalesce(reset_anchor.unrealized_pnl_usdt,0)
+                       coalesce(account_anchor.unrealized_pnl_usdt,0)
                          AS reset_unrealized_pnl_usdt,
-                       coalesce(reset_anchor.total_pnl_usdt,0)
+                       coalesce(account_anchor.total_pnl_usdt,0)
                          AS reset_total_pnl_usdt,
                        (SELECT occurred_at FROM reset) AS reset_occurred_at,
                        CASE WHEN (SELECT occurred_at FROM reset) IS NULL THEN coalesce(
@@ -2759,7 +2830,7 @@ class PostgresTelegramState:
                        ) WHEN (SELECT occurred_at FROM reset)>=(
                          SELECT day_started_at FROM boundaries
                        )
-                         THEN coalesce(reset_anchor.total_pnl_usdt,0)
+                         THEN coalesce(account_anchor.total_pnl_usdt,0)
                        ELSE coalesce(
                          (SELECT valuation.total_pnl_usdt
                             FROM copytrading.account_valuation_events AS valuation,
@@ -2768,7 +2839,7 @@ class PostgresTelegramState:
                              AND valuation.observed_at>=reset.occurred_at
                            ORDER BY valuation.observed_at DESC,
                                     valuation.valuation_event_id DESC LIMIT 1),
-                         reset_anchor.total_pnl_usdt,0)
+                         account_anchor.total_pnl_usdt,0)
                        END AS day_anchor_pnl_usdt,
                        CASE WHEN (SELECT occurred_at FROM reset) IS NULL THEN coalesce(
                          (SELECT total_pnl_usdt
@@ -2782,7 +2853,7 @@ class PostgresTelegramState:
                        ) WHEN (SELECT occurred_at FROM reset)>=(
                          SELECT month_started_at FROM boundaries
                        )
-                         THEN coalesce(reset_anchor.total_pnl_usdt,0)
+                         THEN coalesce(account_anchor.total_pnl_usdt,0)
                        ELSE coalesce(
                          (SELECT valuation.total_pnl_usdt
                             FROM copytrading.account_valuation_events AS valuation,
@@ -2791,10 +2862,10 @@ class PostgresTelegramState:
                              AND valuation.observed_at>=reset.occurred_at
                            ORDER BY valuation.observed_at DESC,
                                     valuation.valuation_event_id DESC LIMIT 1),
-                         reset_anchor.total_pnl_usdt,0)
+                         account_anchor.total_pnl_usdt,0)
                        END AS month_anchor_pnl_usdt
                   FROM latest
-                  LEFT JOIN reset_anchor ON true
+                  LEFT JOIN account_anchor ON true
                 """,
                 (),
             )
@@ -2918,7 +2989,7 @@ class PostgresTelegramState:
             f"已实现净额: {signed_money(realized)} U\n"
             f"未实现盈亏: {signed_money(unrealized)} U\n"
             f"手续费/资金费等净调整: {signed_money(net_account_adjustment)} U\n"
-            f"可用额度: {compact_money(row['logical_available_usdt'])} U\n"
+            f"逻辑可用余额: {compact_money(row['logical_available_usdt'])} U\n"
             f"占用保证金: {compact_money(row['total_initial_margin_usdt'])} U"
         )
         line_cards: list[str] = []
@@ -3587,12 +3658,14 @@ def _notification_text_raw(
         summary = str(payload.get("summary", "带单员锁定状态变更完成"))
         return "\n".join(_safe_text(line, 500) for line in summary.splitlines())[:1000]
     if payload.get("event") == "copy_pnl_reset":
+        operating_envelope = compact_money(payload.get("operating_envelope_usdt", "150"))
         return (
-            "💹 盈亏统计已恢复初始状态\n"
-            "系统处理: 当前净值已按初始 150 U 重新计算; 系统总盈亏、"
+            "💹 交易资金与盈亏已恢复初始状态\n"
+            f"系统处理: 交易资金净值已恢复为 {operating_envelope} U; 系统总盈亏、"
             "每日/每月/累计盈亏、各条线、"
             "各带单员和当前仓位的盈亏均已从现在重新计为 0\n"
-            "保留内容: 当前仓位、待成交订单、带单员配置和历史审计记录均未修改\n"
+            "保留内容: 当前仓位、待成交订单、带单员配置和历史审计记录均未修改; "
+            "已有仓位仍会占用保证金额度\n"
             f"生效时间: {_display_shanghai_time(payload.get('occurred_at'))}"
         )
     if payload.get("event") == "copy_system":
