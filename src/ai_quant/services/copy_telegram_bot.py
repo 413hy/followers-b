@@ -23,6 +23,7 @@ from ai_quant.notifications.telegram_bot import (
     TelegramBotFileConfig,
     TelegramMenuRouter,
     notification_inline_keyboard,
+    persistent_reply_keyboard,
 )
 
 _STOP = False
@@ -126,6 +127,40 @@ def main() -> int:
         margin_admin=state,
         audit_trigger=_trigger_codex_audit,
     )
+    try:
+        client.configure_menu()
+    except TelegramBotError as error:
+        # The reply keyboard still works through /start and /menu if Telegram's
+        # command-menu configuration is temporarily unavailable.
+        print(
+            json.dumps(
+                {
+                    "event": "copy_telegram_menu_config_error",
+                    "reason": str(error),
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+    for startup_chat_id in config.allowed_chat_ids:
+        try:
+            client.send_message(
+                startup_chat_id,
+                "⌨️ 底部导航键盘已恢复并设为常驻。",
+                reply_markup=persistent_reply_keyboard(),
+                disable_notification=True,
+            )
+        except TelegramBotError as error:
+            print(
+                json.dumps(
+                    {
+                        "event": "copy_telegram_keyboard_restore_error",
+                        "reason": str(error),
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     offset: int | None = None

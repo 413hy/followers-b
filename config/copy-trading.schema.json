@@ -15,7 +15,7 @@
       "properties": {
         "origin": { "const": "https://www.binance.com" },
         "adapter_contract": { "const": "UNDOCUMENTED_PUBLIC_WEB_BAPI" },
-        "poll_interval_seconds": { "const": 30 },
+        "poll_interval_seconds": { "const": 10 },
         "page_size": { "type": "integer", "minimum": 10, "maximum": 100 },
         "request_timeout_seconds": { "type": "integer", "minimum": 3, "maximum": 30 },
         "maximum_response_bytes": { "type": "integer", "minimum": 65536, "maximum": 8388608 },
@@ -43,7 +43,7 @@
         "leader_count": { "const": 3 },
         "long_term_slots": { "const": 1 },
         "short_term_slots": { "const": 2 },
-        "manual_custom_slots": { "const": 2 },
+        "manual_custom_slots": { "const": 7 },
         "custom_slot_selection": { "const": "TELEGRAM_OWNER_ONLY" },
         "candidate_pool_size": { "type": "integer", "minimum": 20, "maximum": 500 },
         "time_range": { "enum": ["30D", "90D"] },

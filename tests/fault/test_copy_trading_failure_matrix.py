@@ -489,6 +489,66 @@ def test_runtime_fails_closed_when_one_way_reduction_has_no_direction_evidence()
     ]
 
 
+def test_initial_baseline_accepts_ambiguous_one_way_history_without_replaying_it() -> None:
+    raw_history = PublicLeaderOrder.from_api(
+        "5108371059752839168",
+        {
+            "symbol": "ETHUSDT",
+            "positionSide": "BOTH",
+            "side": "BUY",
+            "type": "MARKET",
+            "executedQty": "2",
+            "avgPrice": "1900",
+            "totalPnl": "200",
+            "orderTime": 1_700_000_001_000,
+            "orderUpdateTime": 1_700_000_001_000,
+        },
+    )
+
+    class BaselineRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__(
+                assignments=(
+                    replace(
+                        _assignment(),
+                        lifecycle=LeaderLifecycle.OBSERVE_ONLY,
+                    ),
+                )
+            )
+            self.lifecycle_changes: list[LeaderLifecycle] = []
+
+        def append_lifecycle(
+            self,
+            leader_id: str,
+            lifecycle: LeaderLifecycle,
+            **kwargs: Any,
+        ) -> None:
+            assert leader_id == "5108371059752839168"
+            assert isinstance(kwargs.get("occurred_at"), datetime)
+            self.lifecycle_changes.append(lifecycle)
+
+    repository = BaselineRepository()
+    public = FakePublic(orders=(raw_history,))
+    incidents: list[str] = []
+
+    report = _runtime(
+        repository,
+        public,
+        FakeExecutor(),
+        incidents,
+    ).run_cycle()
+
+    assert report.successful_polls == 1
+    assert report.failed_polls == 0
+    assert report.new_signal_count == 0
+    assert repository.ingest_baselines == [True]
+    assert repository.ingested_source_orders == [(raw_history,)]
+    assert repository.poll_reason_codes == [("COPY_BASELINE_POSITION_SIDE_EVIDENCE_DEFERRED",)]
+    assert repository.lifecycle_changes == [LeaderLifecycle.ACTIVE]
+    assert public.position_calls == []
+    assert incidents == []
+
+
 def test_reduce_all_auto_resumes_after_every_virtual_position_is_flat() -> None:
     repository = FakeRepository(
         control=RuntimeControlState.REDUCE_ALL,

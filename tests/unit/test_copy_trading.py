@@ -22,6 +22,7 @@ from ai_quant.copy_trading.models import (
     SourcePositionSide,
 )
 from ai_quant.copy_trading.normalization import LeaderOrderTracker
+from ai_quant.copy_trading.repository import _is_source_order_baseline
 
 
 def _response(data: dict[str, Any], *, status: int = 200) -> PublicHttpResult:
@@ -70,6 +71,26 @@ def _order(
             "orderTime": order_time,
             "orderUpdateTime": update_time,
         },
+    )
+
+
+def test_resolved_view_of_ambiguous_initial_row_remains_baseline() -> None:
+    assert _is_source_order_baseline(
+        baseline=False,
+        has_previous=False,
+        update_time_ms=1_700_000_001_000,
+        maximum_update_time_ms=1_700_000_001_000,
+        matches_ambiguous_baseline=True,
+    )
+
+
+def test_same_millisecond_distinct_live_order_is_not_suppressed() -> None:
+    assert not _is_source_order_baseline(
+        baseline=False,
+        has_previous=False,
+        update_time_ms=1_700_000_001_000,
+        maximum_update_time_ms=1_700_000_001_000,
+        matches_ambiguous_baseline=False,
     )
 
 
@@ -143,6 +164,141 @@ def test_public_candidate_page_can_isolate_malformed_unrelated_rows() -> None:
     assert page.total == 2
     assert page.invalid_row_count == 1
     assert page.invalid_reason_codes == ("COPY_FIELD_NICKNAME_INVALID",)
+
+
+def test_public_directory_reads_every_server_sized_page() -> None:
+    calls: list[int] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers
+        request = json.loads(body)
+        page_number = int(request["pageNumber"])
+        calls.append(page_number)
+        if page_number <= 3:
+            return _response(
+                {
+                    "list": [
+                        {
+                            **_leader(),
+                            "leadPortfolioId": f"510837105975283916{page_number}",
+                        }
+                    ],
+                    "total": 3,
+                }
+            )
+        raise AssertionError("directory read beyond total")
+
+    directory = BinancePublicCopyClient(transport=transport).list_all_leaders()
+
+    assert calls == [1, 2, 3]
+    assert directory.total == 3
+    assert len(directory.leaders) == 3
+
+
+def test_public_directory_adapts_when_live_total_shrinks_during_paging() -> None:
+    calls: list[int] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers
+        page_number = int(json.loads(body)["pageNumber"])
+        calls.append(page_number)
+        if page_number == 1:
+            rows = [
+                {**_leader(), "leadPortfolioId": "5108371059752839161"},
+                {**_leader(), "leadPortfolioId": "5108371059752839162"},
+            ]
+            return _response({"list": rows, "total": 4})
+        return _response(
+            {
+                "list": [{**_leader(), "leadPortfolioId": "5108371059752839163"}],
+                "total": 3,
+            }
+        )
+
+    directory = BinancePublicCopyClient(transport=transport).list_all_leaders()
+
+    assert calls == [1, 2]
+    assert directory.total == 3
+    assert len(directory.leaders) == 3
+
+
+def test_public_directory_extends_paging_when_live_total_grows() -> None:
+    calls: list[int] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers
+        page_number = int(json.loads(body)["pageNumber"])
+        calls.append(page_number)
+        start = (page_number - 1) * 2
+        count = 1 if page_number == 3 else 2
+        rows = [
+            {
+                **_leader(),
+                "leadPortfolioId": f"5108371059752839{start + offset + 1:03d}",
+            }
+            for offset in range(count)
+        ]
+        return _response({"list": rows, "total": 4 if page_number == 1 else 5})
+
+    directory = BinancePublicCopyClient(transport=transport).list_all_leaders()
+
+    assert calls == [1, 2, 3]
+    assert directory.total == 5
+    assert len(directory.leaders) == 5
+
+
+def test_public_directory_retries_whole_snapshot_before_surfacing_incomplete() -> None:
+    calls: list[int] = []
+    delays: list[float] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers
+        page_number = int(json.loads(body)["pageNumber"])
+        calls.append(page_number)
+        if calls == [1, 2]:
+            return _response({"list": [], "total": 2})
+        return _response(
+            {
+                "list": [
+                    {
+                        **_leader(),
+                        "leadPortfolioId": f"510837105975283916{page_number}",
+                    }
+                ],
+                "total": 2,
+            }
+        )
+
+    directory = BinancePublicCopyClient(
+        transport=transport,
+        retry_attempts=2,
+        sleeper=delays.append,
+    ).list_all_leaders()
+
+    assert calls == [1, 2, 1, 2]
+    assert delays == [0.5]
+    assert directory.total == 2
+    assert len(directory.leaders) == 2
 
 
 def test_public_directory_can_find_id_or_name_without_trusting_unrelated_bad_rows() -> None:
@@ -462,6 +618,84 @@ def test_public_client_fails_closed_when_rows_have_ambiguous_derived_identity() 
         "avgPrice": "2001",
         "orderUpdateTime": 1_700_000_002_000,
     }
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [first, second], "total": 2}
+        )
+    )
+
+    with pytest.raises(BinancePublicCopyError, match="IDENTITY_AMBIGUOUS"):
+        client.order_history("5108371059752839168")
+
+
+def test_public_client_disambiguates_same_millisecond_limit_ladder_by_price() -> None:
+    first = {
+        "symbol": "LABUSDT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "positionSide": "LONG",
+        "executedQty": "1565",
+        "avgPrice": "0.1417999",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    second = {
+        **first,
+        "executedQty": "1554",
+        "avgPrice": "0.1427999",
+        "orderUpdateTime": 1_700_000_001_001,
+    }
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [first, second], "total": 2}
+        )
+    )
+
+    page = client.order_history("5108371059752839168")
+
+    assert len(page.orders) == 2
+    assert len({order.identity_key for order in page.orders}) == 2
+
+
+def test_limit_ladder_identity_is_stable_when_fill_quantity_changes() -> None:
+    raw = {
+        "symbol": "LABUSDT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "positionSide": "LONG",
+        "executedQty": "100",
+        "avgPrice": "0.1417999",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    partial = PublicLeaderOrder.from_api("5108371059752839168", raw)
+    complete = PublicLeaderOrder.from_api(
+        "5108371059752839168",
+        {**raw, "executedQty": "200", "orderUpdateTime": 1_700_000_002_000},
+    )
+
+    partial = partial.with_identity_discriminator("LIMIT_AVG_PRICE:0.1417999")
+    complete = complete.with_identity_discriminator("LIMIT_AVG_PRICE:0.1417999")
+
+    assert partial.identity_key == complete.identity_key
+    assert partial.event_key != complete.event_key
+
+
+def test_public_client_keeps_limit_collision_fail_closed_when_price_is_not_unique() -> None:
+    first = {
+        "symbol": "LABUSDT",
+        "side": "BUY",
+        "type": "LIMIT",
+        "positionSide": "LONG",
+        "executedQty": "100",
+        "avgPrice": "0.14",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    second = {**first, "executedQty": "200", "orderUpdateTime": 1_700_000_001_001}
     client = BinancePublicCopyClient(
         transport=lambda method, url, headers, body: _response(
             {"list": [first, second], "total": 2}

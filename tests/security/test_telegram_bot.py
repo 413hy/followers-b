@@ -30,6 +30,7 @@ from ai_quant.notifications.telegram_bot import (
     entry_margin_limit_keyboard,
     leader_lock_keyboard,
     leader_management_keyboard,
+    leader_slot_actions_keyboard,
     multiplier_management_keyboard,
     multiplier_value_keyboard,
     notification_inline_keyboard,
@@ -62,6 +63,33 @@ def test_oversized_dynamic_message_is_bounded_instead_of_crashing_bot(tmp_path: 
     assert len(sent) <= 4000
     assert sent.endswith("⚠️ 内容过长, 后续记录已省略。")
     assert bounded_telegram_text("short") == "short"
+
+
+def test_navigation_keyboard_can_be_restored_without_notification(tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    def transport(
+        path: str,
+        document: dict[str, object],
+        timeout: float,
+    ) -> TelegramHttpResult:
+        del path, timeout
+        calls.append(document)
+        return TelegramHttpResult(
+            200,
+            json.dumps({"ok": True, "result": {"message_id": 11}}).encode(),
+        )
+
+    client = TelegramBotClient(_config(tmp_path), transport=transport)
+    client.send_message(
+        42,
+        "keyboard restored",
+        reply_markup=persistent_reply_keyboard(),
+        disable_notification=True,
+    )
+
+    assert calls[0]["disable_notification"] is True
+    assert calls[0]["reply_markup"] == persistent_reply_keyboard()
 
 
 class Dashboard:
@@ -360,6 +388,10 @@ def test_long_polling_and_menu_use_only_allowed_bot_methods(tmp_path: Path) -> N
         calls.append((path, document, timeout))
         if path.endswith("/getUpdates"):
             result: Any = [{"update_id": 7}]
+        elif path.endswith(("/setMyCommands", "/setChatMenuButton")):
+            result = True
+        elif path.endswith("/getChatMenuButton"):
+            result = {"type": "commands"}
         else:
             result = {"message_id": 10}
         return TelegramHttpResult(200, json.dumps({"ok": True, "result": result}).encode())
@@ -367,10 +399,25 @@ def test_long_polling_and_menu_use_only_allowed_bot_methods(tmp_path: Path) -> N
     client = TelegramBotClient(_config(tmp_path), transport=transport)
     assert client.get_updates(offset=7)[0]["update_id"] == 7
     client.send_message(42, "hello", reply_markup={"inline_keyboard": []})
+    client.configure_menu()
 
     assert calls[0][0].endswith("/getUpdates")
     assert calls[0][1]["allowed_updates"] == ["message", "callback_query"]
     assert calls[1][0].endswith("/sendMessage")
+    assert calls[2][0].endswith("/setMyCommands")
+    assert {"command": "menu", "description": "重新显示底部导航键盘"} in (  # type: ignore[operator]
+        calls[2][1]["commands"]
+    )
+    assert calls[3][0].endswith("/setChatMenuButton")
+    assert calls[3][1]["menu_button"] == {"type": "commands"}
+    assert "chat_id" not in calls[3][1]
+    assert calls[4][0].endswith("/setChatMenuButton")
+    assert calls[4][1] == {
+        "chat_id": 42,
+        "menu_button": {"type": "commands"},
+    }
+    assert calls[5][0].endswith("/getChatMenuButton")
+    assert calls[5][1] == {"chat_id": 42}
     assert all("setWebhook" not in call[0] for call in calls)
 
 
@@ -473,12 +520,19 @@ def test_reply_keyboard_is_safe_compact_and_toggleable_from_the_input_field() ->
     rows = keyboard["keyboard"]
     assert isinstance(rows, list)
     labels = [button["text"] for row in rows for button in row]
-    assert labels == ["📊 总览", "📈 仓位", "👥 带单员", "🧾 订单", "💹 盈亏", "⚙️ 控制"]
+    assert labels == [
+        "📊 总览",
+        "📈 仓位",
+        "👥 带单员",
+        "🧾 订单",
+        "💹 盈亏",
+        "⚙️ 控制",
+    ]
     assert not any(label in labels for label in ("暂停", "恢复", "全部减仓"))
     assert keyboard["resize_keyboard"] is True
-    assert keyboard["is_persistent"] is False
+    assert keyboard["is_persistent"] is True
     assert keyboard["one_time_keyboard"] is False
-    assert keyboard["input_field_placeholder"] == "点输入框旁的键盘图标切换导航"
+    assert keyboard["input_field_placeholder"] == "底部导航常驻; 可用输入框旁图标切换"
 
 
 def test_contextual_inline_buttons_separate_navigation_from_dangerous_controls() -> None:
@@ -646,12 +700,27 @@ def test_multiplier_keyboards_bind_callbacks_to_leader_id_not_slot() -> None:
         for button in row
     ]
     assert "mult:manage" in manage_callbacks
-    assert "lead:manual:custom1" in manage_callbacks
-    assert "lead:manual:custom2" in manage_callbacks
-    assert "lead:candidates:custom1" not in manage_callbacks
-    assert "lead:candidates:custom2" not in manage_callbacks
-    assert "lead:remove:custom1" in manage_callbacks
-    assert "lead:remove:custom2" in manage_callbacks
+    assert len(manage_callbacks) == 13
+    for number in range(1, 8):
+        slot_value = f"custom{number}"
+        assert f"lead:slot:{slot_value}" in manage_callbacks
+        action_callbacks = [
+            button["callback_data"]
+            for row in leader_slot_actions_keyboard(LeaderSlot[f"CUSTOM_{number}"])[
+                "inline_keyboard"
+            ]
+            for button in row
+        ]
+        assert f"lead:manual:{slot_value}" in action_callbacks
+        assert f"lead:candidates:{slot_value}" not in action_callbacks
+        assert f"lead:remove:{slot_value}" in action_callbacks
+    automatic_actions = [
+        button["callback_data"]
+        for row in leader_slot_actions_keyboard(LeaderSlot.SHORT_TERM_1)["inline_keyboard"]
+        for button in row
+    ]
+    assert "lead:candidates:short1" in automatic_actions
+    assert "lead:remove:short1" in automatic_actions
     assert "lock:manage" in manage_callbacks
 
 
@@ -738,9 +807,7 @@ def test_account_summary_reset_requires_authorization_and_two_step_confirmation(
         }
     )
     assert challenges.created == [(42, ControlAction.RESET_ACCOUNT_SUMMARY)]
-    confirmation = next(
-        document for method, document in calls if method == "sendMessage"
-    )
+    confirmation = next(document for method, document in calls if method == "sendMessage")
     assert "不会删除或平掉仓位" in str(confirmation["text"])
     confirmation_rows = confirmation["reply_markup"]["inline_keyboard"]  # type: ignore[index]
     assert confirmation_rows[0][0]["callback_data"] == "summary_confirm:nonce123456"
@@ -1431,6 +1498,11 @@ def test_start_installs_bottom_keyboard_and_text_controls_still_require_confirma
     base = {"chat": {"id": 42}, "from": {"id": 42}}
     router.handle({"message": {**base, "text": "/start"}})
     assert "keyboard" in calls[-1][1]["reply_markup"]  # type: ignore[operator]
+    assert calls[-1][1]["reply_markup"]["is_persistent"] is True  # type: ignore[index]
+    assert calls[-1][1]["reply_markup"]["one_time_keyboard"] is False  # type: ignore[index]
+
+    router.handle({"message": {**base, "text": "/menu"}})
+    assert "keyboard" in calls[-1][1]["reply_markup"]  # type: ignore[operator]
 
     router.handle({"message": {**base, "text": "/pause"}})
     assert challenges.created == [(42, ControlAction.PAUSE_NEW_ENTRIES)]
@@ -1569,6 +1641,19 @@ def test_leader_management_buttons_require_authorization_and_confirmation(
     assert calls[-1][1]["text"] == "你没有管理权限"
 
     callback("manage", 42, "lead:manage")
+    callback("slot", 42, "lead:slot:custom7")
+    assert calls[-1][0] == "editMessageText"
+    assert "10 号槽位" in str(calls[-1][1]["text"])
+    slot_callbacks = [
+        button["callback_data"]
+        for row in calls[-1][1]["reply_markup"]["inline_keyboard"]  # type: ignore[index]
+        for button in row
+    ]
+    assert slot_callbacks == [
+        "lead:manual:custom7",
+        "lead:remove:custom7",
+        "lead:manage",
+    ]
     callback("candidates", 42, "lead:candidates:short1")
     callback("set", 42, "lead:set:short1:5109186975387420161")
     assert admin.proposed == [(42, LeaderSlot.SHORT_TERM_1, "5109186975387420161")]
@@ -1670,7 +1755,7 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             "callback_query": {
                 "id": "manual",
                 "from": {"id": 42},
-                "data": "lead:manual:custom2",
+                "data": "lead:manual:custom7",
                 "message": {"message_id": 88, "chat": {"id": 42}},
             }
         }
@@ -1689,7 +1774,7 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             }
         }
     )
-    assert admin.external == [(42, LeaderSlot.CUSTOM_2, "5014426348046646785")]
+    assert admin.external == [(42, LeaderSlot.CUSTOM_7, "5014426348046646785")]
     assert calls[-1][1]["text"] == "confirm external leader"
 
     router.handle(
@@ -1704,7 +1789,7 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             }
         }
     )
-    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_2, "4788776444236355328")
+    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_7, "4788776444236355328")
     assert calls[-1][1]["text"] == "confirm external leader"
 
     router.handle(
@@ -1716,7 +1801,7 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             }
         }
     )
-    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_2, "4788776444236355328")
+    assert admin.external[-1] == (42, LeaderSlot.CUSTOM_7, "4788776444236355328")
     assert "ID或Binance详情链接" in str(calls[-1][1]["text"])
 
     router.handle(
@@ -1728,8 +1813,8 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
             }
         }
     )
-    assert admin.searches == [(LeaderSlot.CUSTOM_2, "印钞机百分百")]
-    assert calls[-1][1]["text"].startswith("🔎 🎯 自定义 2名称搜索结果")
+    assert admin.searches == [(LeaderSlot.CUSTOM_7, "印钞机百分百")]
+    assert calls[-1][1]["text"].startswith("🔎 🎯 自定义 7名称搜索结果")
 
     router.handle(
         {
@@ -1741,8 +1826,8 @@ def test_manual_leader_force_reply_accepts_id_or_name_only_for_authorized_user(
         }
     )
     assert admin.external == [
-        (42, LeaderSlot.CUSTOM_2, "5014426348046646785"),
-        (42, LeaderSlot.CUSTOM_2, "4788776444236355328"),
+        (42, LeaderSlot.CUSTOM_7, "5014426348046646785"),
+        (42, LeaderSlot.CUSTOM_7, "4788776444236355328"),
     ]
     assert calls[-1][1]["text"] == "你没有带单员管理权限。"
 

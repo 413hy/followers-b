@@ -130,9 +130,7 @@ class CopyTradingRepository:
                 ) > timedelta(minutes=2):
                     raise CopyRepositoryError("COPY_PNL_RESET_VALUATION_STALE")
                 valuation_event_id = str(anchor["valuation_event_id"])
-                exchange_margin_balance_usdt = Decimal(
-                    str(anchor["exchange_margin_balance_usdt"])
-                )
+                exchange_margin_balance_usdt = Decimal(str(anchor["exchange_margin_balance_usdt"]))
                 exchange_available_balance_usdt = Decimal(
                     str(anchor["exchange_available_balance_usdt"])
                 )
@@ -282,9 +280,7 @@ class CopyTradingRepository:
                     "operating_envelope_usdt": str(operating_envelope_usdt),
                     "logical_available_usdt": str(
                         logical_available_balance(
-                            exchange_available_balance_usdt=(
-                                exchange_available_balance_usdt
-                            ),
+                            exchange_available_balance_usdt=(exchange_available_balance_usdt),
                             logical_equity_usdt=operating_envelope_usdt,
                             total_initial_margin_usdt=total_initial_margin_usdt,
                         )
@@ -404,8 +400,7 @@ class CopyTradingRepository:
             raise CopyRepositoryError("COPY_LEADER_TREND_INVALID")
         return LeaderPerformanceTrend(
             baseline_age_hours=(
-                Decimal(str((observed_at - baseline_at).total_seconds()))
-                / Decimal("3600")
+                Decimal(str((observed_at - baseline_at).total_seconds())) / Decimal("3600")
             ).quantize(Decimal("0.000001")),
             roi_change_pct=_relative_change_pct(
                 leader.roi_pct,
@@ -420,8 +415,7 @@ class CopyTradingRepository:
                 Decimal(str(row["aum_usdt"])),
             ),
             maximum_drawdown_change_points=(
-                leader.maximum_drawdown_pct
-                - Decimal(str(row["maximum_drawdown_pct"]))
+                leader.maximum_drawdown_pct - Decimal(str(row["maximum_drawdown_pct"]))
             ).quantize(Decimal("0.000001")),
         )
 
@@ -739,9 +733,7 @@ class CopyTradingRepository:
                             )
                         selected_direct.add(leader_id)
                         selected_status[leader_id] = (
-                            "LOCKED_UNCHANGED"
-                            if leader_id in locked_leader_ids
-                            else "UNCHANGED"
+                            "LOCKED_UNCHANGED" if leader_id in locked_leader_ids else "UNCHANGED"
                         )
                         replacement_results.append(
                             {
@@ -845,20 +837,13 @@ class CopyTradingRepository:
                 selected_rank = {
                     leader_id: index
                     for index, leader_id in enumerate(
-                        (
-                            value
-                            for value in selected_leader_ids
-                            if value not in blocked_by_lock
-                        ),
+                        (value for value in selected_leader_ids if value not in blocked_by_lock),
                         start=1,
                     )
                 }
                 backup_ids = set(backups.values())
                 decision_ids = (
-                    set(candidate_by_id)
-                    | displaced
-                    | set(selected_leader_ids)
-                    | backup_ids
+                    set(candidate_by_id) | displaced | set(selected_leader_ids) | backup_ids
                 )
                 for leader_id in sorted(decision_ids):
                     assessment = assessments.get(leader_id)
@@ -866,9 +851,7 @@ class CopyTradingRepository:
                     if leader_id in blocked_by_lock:
                         outcome = "REJECTED"
                         rank = None
-                        decision_reasons = (
-                            "COPY_SLOT_REPLACEMENT_BLOCKED_BY_LEADER_LOCK",
-                        )
+                        decision_reasons = ("COPY_SLOT_REPLACEMENT_BLOCKED_BY_LEADER_LOCK",)
                     elif leader_id in selected_rank:
                         outcome = "SELECTED"
                         rank = selected_rank[leader_id]
@@ -878,9 +861,7 @@ class CopyTradingRepository:
                     elif leader_id in backup_ids:
                         outcome = "REJECTED"
                         rank = None
-                        decision_reasons = (
-                            "COPY_SELECTION_LOCKED_SLOT_BACKUP_SELECTED",
-                        )
+                        decision_reasons = ("COPY_SELECTION_LOCKED_SLOT_BACKUP_SELECTED",)
                     else:
                         outcome = "REJECTED"
                         rank = None
@@ -1613,7 +1594,7 @@ class CopyTradingRepository:
         A replaced leader remains DRAINING while it has a local position or an
         unfinished signal so its eventual source reduction is never missed.  Once
         both are absent, continuing to poll it serves no recovery purpose and makes
-        the runtime leader count exceed the five configured slots.
+        the runtime leader count exceed the ten configured slots.
         """
 
         _require_utc(occurred_at)
@@ -1673,9 +1654,7 @@ class CopyTradingRepository:
                     """,
                     (),
                 )
-                leader_ids = tuple(
-                    str(row["lead_portfolio_id"]) for row in cursor.fetchall()
-                )
+                leader_ids = tuple(str(row["lead_portfolio_id"]) for row in cursor.fetchall())
                 for leader_id in leader_ids:
                     cursor.execute(
                         """
@@ -2026,8 +2005,41 @@ class CopyTradingRepository:
                     else:
                         has_previous = True
                         previous = Decimal(str(previous_row["executed_quantity"]))
-                    is_baseline = baseline or (
-                        not has_previous and order.update_time_ms < maximum_update_time_ms
+                    matches_ambiguous_baseline = False
+                    if (
+                        not baseline
+                        and not has_previous
+                        and order.position_side is not SourcePositionSide.BOTH
+                    ):
+                        cursor.execute(
+                            """
+                            SELECT EXISTS(
+                              SELECT 1
+                                FROM copytrading.source_order_events
+                               WHERE lead_portfolio_id=%s
+                                 AND position_side='BOTH'
+                                 AND is_baseline
+                                 AND source_payload_hash=%s
+                                 AND (%s::timestamptz IS NULL OR observed_at>%s)
+                            ) AS matched
+                            """,
+                            (
+                                lead_portfolio_id,
+                                order.raw_payload_hash,
+                                reset_at,
+                                reset_at,
+                            ),
+                        )
+                        ambiguous_baseline_row = cursor.fetchone()
+                        matches_ambiguous_baseline = bool(
+                            ambiguous_baseline_row and ambiguous_baseline_row["matched"]
+                        )
+                    is_baseline = _is_source_order_baseline(
+                        baseline=baseline,
+                        has_previous=has_previous,
+                        update_time_ms=order.update_time_ms,
+                        maximum_update_time_ms=maximum_update_time_ms,
+                        matches_ambiguous_baseline=matches_ambiguous_baseline,
                     )
                     cursor.execute(
                         """
@@ -2138,6 +2150,7 @@ class CopyTradingRepository:
                            source_payload_hash
                      FROM copytrading.source_order_events
                      WHERE lead_portfolio_id=%s
+                       AND position_side<>'BOTH'
                        AND observed_at>coalesce(
                            (SELECT occurred_at FROM latest_reset),'-infinity'::timestamptz
                        )
@@ -3614,8 +3627,23 @@ def _digest(document: Mapping[str, Any]) -> str:
 def _relative_change_pct(current: Decimal, baseline: Decimal) -> Decimal:
     if baseline == 0:
         return Decimal("0") if current == 0 else Decimal("100")
-    return ((current - baseline) / abs(baseline) * Decimal("100")).quantize(
-        Decimal("0.000001")
+    return ((current - baseline) / abs(baseline) * Decimal("100")).quantize(Decimal("0.000001"))
+
+
+def _is_source_order_baseline(
+    *,
+    baseline: bool,
+    has_previous: bool,
+    update_time_ms: int,
+    maximum_update_time_ms: int,
+    matches_ambiguous_baseline: bool,
+) -> bool:
+    """Suppress a resolved replay of an already stored ambiguous baseline row."""
+
+    return (
+        baseline
+        or matches_ambiguous_baseline
+        or (not has_previous and update_time_ms < maximum_update_time_ms)
     )
 
 

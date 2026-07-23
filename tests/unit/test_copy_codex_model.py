@@ -16,6 +16,7 @@ from ai_quant.copy_trading.codex_model import (
 )
 from ai_quant.copy_trading.codex_repair import CodexSystemRepairer
 from ai_quant.services.copy_codex_audit import (
+    _RECENT_LEADER_POLL_FAILURES_SQL,
     _RECENT_SIGNAL_ERRORS_SQL,
     _newly_resolved_incident_ids,
     _pause_new_entries_justified,
@@ -29,6 +30,15 @@ def test_completed_codex_audit_prevents_repeat_signal_error_alerts() -> None:
     assert "audit.findings->'reviewed_signal_ids'" in _RECENT_SIGNAL_ERRORS_SQL
     assert "audit.findings ? 'codex'" in _RECENT_SIGNAL_ERRORS_SQL
     assert "NOT (audit.findings ? 'reviewed_signal_ids')" in _RECENT_SIGNAL_ERRORS_SQL
+
+
+def test_codex_audit_reads_exact_latest_failure_for_each_active_leader() -> None:
+    assert "state IN ('OBSERVE_ONLY','ACTIVE','DRAINING')" in _RECENT_LEADER_POLL_FAILURES_SQL
+    assert "ORDER BY occurred_at DESC,poll_event_id DESC LIMIT 1" in (
+        _RECENT_LEADER_POLL_FAILURES_SQL
+    )
+    assert "reason_codes" in _RECENT_LEADER_POLL_FAILURES_SQL
+    assert "failure_count_last_10_minutes" in _RECENT_LEADER_POLL_FAILURES_SQL
 
 
 def test_audit_detects_incident_recovery_during_model_review() -> None:
@@ -138,6 +148,8 @@ def test_hourly_audit_passes_model_policy_despite_ignoring_user_config(
     assert "--ignore-user-config" in captured
     assert captured[captured.index("--model") + 1] == "gpt-5.6-sol"
     assert captured[captured.index("--config") + 1] == 'model_reasoning_effort="high"'
+    assert "recent_leader_poll_failures" in captured[-1]
+    assert "COPY_ORDER_IDENTITY_AMBIGUOUS" in captured[-1]
     assert "Simplified Chinese" in captured[-1]
 
 

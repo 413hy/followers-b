@@ -7,6 +7,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -171,6 +172,102 @@ class BinancePublicCopyClient:
             invalid_reason_codes=tuple(sorted(set(invalid_reasons))),
         )
 
+    def list_all_leaders(
+        self,
+        *,
+        time_range: str = "30D",
+        data_type: str = "ROI",
+        maximum_pages: int = 400,
+    ) -> LeaderPage:
+        """Read every page while tolerating a bounded live-directory snapshot change."""
+
+        if not 1 <= maximum_pages <= 1000:
+            raise ValueError("copy leader directory page limit is invalid")
+        for attempt in range(self._retry_attempts):
+            try:
+                return self._list_all_leaders_snapshot(
+                    time_range=time_range,
+                    data_type=data_type,
+                    maximum_pages=maximum_pages,
+                )
+            except BinancePublicCopyError as error:
+                if (
+                    str(error) != "COPY_LEADER_DIRECTORY_INCOMPLETE"
+                    or attempt + 1 >= self._retry_attempts
+                ):
+                    raise
+                # Binance's public directory is live and has no snapshot token. If rows
+                # move while hundreds of server-sized pages are read, retry the complete
+                # snapshot locally instead of surfacing a failed selection run.
+                self._retry(attempt)
+        raise AssertionError("unreachable public directory retry state")
+
+    def _list_all_leaders_snapshot(
+        self,
+        *,
+        time_range: str,
+        data_type: str,
+        maximum_pages: int,
+    ) -> LeaderPage:
+        first = self.list_leaders(
+            page_number=1,
+            page_size=100,
+            time_range=time_range,
+            data_type=data_type,
+            skip_invalid_rows=True,
+        )
+        raw_page_size = len(first.leaders) + first.invalid_row_count
+        if first.total > 0 and raw_page_size == 0:
+            raise BinancePublicCopyError("COPY_LEADER_DIRECTORY_INCOMPLETE")
+        latest_total = first.total
+        required_pages = (
+            0
+            if latest_total == 0
+            else (latest_total + raw_page_size - 1) // raw_page_size
+        )
+        if required_pages > maximum_pages:
+            raise BinancePublicCopyError("COPY_LEADER_DIRECTORY_PAGE_LIMIT")
+        leaders = {leader.lead_portfolio_id: leader for leader in first.leaders}
+        invalid_count = first.invalid_row_count
+        invalid_reasons = set(first.invalid_reason_codes)
+        raw_rows_seen = raw_page_size
+        page_number = 2
+        while page_number <= required_pages:
+            page = self.list_leaders(
+                page_number=page_number,
+                page_size=100,
+                time_range=time_range,
+                data_type=data_type,
+                skip_invalid_rows=True,
+            )
+            latest_total = page.total
+            raw_count = len(page.leaders) + page.invalid_row_count
+            if raw_count == 0:
+                if raw_rows_seen >= latest_total:
+                    break
+                raise BinancePublicCopyError("COPY_LEADER_DIRECTORY_INCOMPLETE")
+            raw_rows_seen += raw_count
+            invalid_count += page.invalid_row_count
+            invalid_reasons.update(page.invalid_reason_codes)
+            for leader in page.leaders:
+                leaders[leader.lead_portfolio_id] = leader
+            required_pages = (
+                0
+                if latest_total == 0
+                else (latest_total + raw_page_size - 1) // raw_page_size
+            )
+            if required_pages > maximum_pages:
+                raise BinancePublicCopyError("COPY_LEADER_DIRECTORY_PAGE_LIMIT")
+            page_number += 1
+        if raw_rows_seen < latest_total:
+            raise BinancePublicCopyError("COPY_LEADER_DIRECTORY_INCOMPLETE")
+        return LeaderPage(
+            leaders=tuple(leaders.values()),
+            total=latest_total,
+            invalid_row_count=invalid_count,
+            invalid_reason_codes=tuple(sorted(invalid_reasons)),
+        )
+
     def find_leader(
         self,
         lead_portfolio_id: str,
@@ -329,6 +426,7 @@ class BinancePublicCopyClient:
             )
         except PublicCopyDataError as error:
             raise BinancePublicCopyError(str(error)) from error
+        orders = _disambiguate_limit_ladder_orders(orders)
         guarded_orders = (
             orders
             if identity_guard_after_ms is None
@@ -538,6 +636,36 @@ def _leader_with_id(rows: list[object], lead_portfolio_id: str) -> LeaderSnapsho
         except PublicCopyDataError as error:
             raise BinancePublicCopyError("COPY_LEADER_LOOKUP_INVALID") from error
     return None
+
+
+def _disambiguate_limit_ladder_orders(
+    orders: tuple[PublicLeaderOrder, ...],
+) -> tuple[PublicLeaderOrder, ...]:
+    """Separate provably distinct same-millisecond LIMIT rows without guessing.
+
+    The public endpoint has no order ID. Multiple rows with the same derived
+    identity in one current response cannot be cumulative snapshots of one order.
+    Distinct LIMIT average prices provide a stable ladder discriminator; every
+    other collision remains ambiguous and is rejected by the caller.
+    """
+
+    grouped: dict[str, list[int]] = defaultdict(list)
+    for index, order in enumerate(orders):
+        grouped[order.identity_key].append(index)
+    resolved = list(orders)
+    for indexes in grouped.values():
+        if len(indexes) < 2:
+            continue
+        group = [orders[index] for index in indexes]
+        prices = {order.average_price for order in group}
+        if any(order.order_type != "LIMIT" for order in group) or len(prices) != len(group):
+            continue
+        for index in indexes:
+            order = orders[index]
+            resolved[index] = order.with_identity_discriminator(
+                f"LIMIT_AVG_PRICE:{order.average_price}"
+            )
+    return tuple(resolved)
 
 
 def _position_quantity(value: object, field: str) -> Decimal:

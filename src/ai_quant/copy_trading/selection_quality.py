@@ -95,9 +95,9 @@ _POLICIES = {
         minimum_track_record_days=18,
         maximum_drawdown_pct=Decimal("18"),
         minimum_nonzero_close_count=20,
-        minimum_profitable_close_rate_pct=Decimal("75"),
+        minimum_profitable_close_rate_pct=Decimal("70"),
         minimum_profit_factor=Decimal("1.20"),
-        maximum_top_two_profit_contribution_pct=Decimal("55"),
+        maximum_top_two_profit_contribution_pct=Decimal("70"),
         maximum_consecutive_losing_closes=3,
         minimum_orders_7d=10,
         minimum_active_days_7d=3,
@@ -109,7 +109,7 @@ _POLICIES = {
         minimum_nonzero_close_count=20,
         minimum_profitable_close_rate_pct=Decimal("65"),
         minimum_profit_factor=Decimal("1.20"),
-        maximum_top_two_profit_contribution_pct=Decimal("55"),
+        maximum_top_two_profit_contribution_pct=Decimal("70"),
         maximum_consecutive_losing_closes=3,
         minimum_orders_1d=1,
         minimum_orders_3d=5,
@@ -253,37 +253,37 @@ def _selection_score(
     social_proof = copy_social_proof_score(leader.current_copy_count)
     if objective == LONG_TERM:
         score = (
-            drawdown * Decimal("0.22")
-            + close_rate * Decimal("0.15")
-            + profit_factor * Decimal("0.13")
-            + concentration * Decimal("0.18")
-            + track_record * Decimal("0.13")
-            + sample_size * Decimal("0.09")
-            + social_proof * Decimal("0.10")
+            social_proof * Decimal("0.35")
+            + drawdown * Decimal("0.15")
+            + close_rate * Decimal("0.12")
+            + profit_factor * Decimal("0.10")
+            + concentration * Decimal("0.12")
+            + track_record * Decimal("0.10")
+            + sample_size * Decimal("0.06")
         )
     elif objective == SHORT_TERM_WIN_RATE:
         score = (
-            _bounded(leader.win_rate_pct) * Decimal("0.28")
-            + close_rate * Decimal("0.23")
-            + drawdown * Decimal("0.14")
-            + concentration * Decimal("0.13")
-            + profit_factor * Decimal("0.09")
-            + sample_size * Decimal("0.05")
-            + social_proof * Decimal("0.08")
+            social_proof * Decimal("0.35")
+            + _bounded(leader.win_rate_pct) * Decimal("0.20")
+            + close_rate * Decimal("0.16")
+            + drawdown * Decimal("0.10")
+            + concentration * Decimal("0.08")
+            + profit_factor * Decimal("0.07")
+            + sample_size * Decimal("0.04")
         )
     else:
         recent_health = _recent_health_score(profile)
         activity = _activity_score(profile)
         score = (
-            close_rate * Decimal("0.14")
-            + _bounded(leader.win_rate_pct) * Decimal("0.07")
-            + drawdown * Decimal("0.20")
-            + concentration * Decimal("0.18")
-            + profit_factor * Decimal("0.10")
-            + recent_health * Decimal("0.08")
-            + track_record * Decimal("0.07")
-            + activity * Decimal("0.09")
-            + social_proof * Decimal("0.07")
+            social_proof * Decimal("0.35")
+            + close_rate * Decimal("0.10")
+            + _bounded(leader.win_rate_pct) * Decimal("0.06")
+            + drawdown * Decimal("0.14")
+            + concentration * Decimal("0.11")
+            + profit_factor * Decimal("0.08")
+            + recent_health * Decimal("0.06")
+            + track_record * Decimal("0.04")
+            + activity * Decimal("0.06")
         )
     score -= _trend_penalty(trend)
     if objective in {SHORT_TERM_WIN_RATE, SHORT_TERM_INTRADAY}:

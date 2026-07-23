@@ -232,7 +232,12 @@ class CopyTradingRuntime:
                         maximum_pages=20,
                     )
                 raw_orders = page.orders
-                if any(order.position_side is SourcePositionSide.BOTH for order in raw_orders):
+                deferred_baseline_direction = baseline and any(
+                    order.position_side is SourcePositionSide.BOTH for order in raw_orders
+                )
+                if not baseline and any(
+                    order.position_side is SourcePositionSide.BOTH for order in raw_orders
+                ):
                     try:
                         position_history = self._public.position_history(
                             assignment.lead_portfolio_id,
@@ -266,7 +271,13 @@ class CopyTradingRuntime:
                     row_count=len(page.orders),
                     maximum_update_time_ms=maximum_update,
                     reason_codes=(
-                        ("COPY_RECOVERY_BASELINE_NO_OWNED_POSITION",) if recovery_baseline else ()
+                        ("COPY_RECOVERY_BASELINE_NO_OWNED_POSITION",)
+                        if recovery_baseline
+                        else (
+                            ("COPY_BASELINE_POSITION_SIDE_EVIDENCE_DEFERRED",)
+                            if deferred_baseline_direction
+                            else ()
+                        )
                     ),
                     occurred_at=now,
                 )
@@ -463,8 +474,7 @@ class CopyTradingRuntime:
             else None
         )
         source_position_closes = (
-            source_position_before is None
-            or signal.source_delta_quantity >= source_position_before
+            source_position_before is None or signal.source_delta_quantity >= source_position_before
         )
         if (
             self._execution_enabled

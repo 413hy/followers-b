@@ -462,9 +462,7 @@ class PostgresTelegramState:
             )
         except CopyRepositoryError as error:
             raise TelegramStateError("TELEGRAM_ACCOUNT_SUMMARY_RESET_FAILED") from error
-        reset_time = occurred_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime(
-            "%m-%d %H:%M:%S"
-        )
+        reset_time = occurred_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%m-%d %H:%M:%S")
         return (
             "✅ 账户汇总已初始化\n"
             "当前净值已重新以 150 U 为起点; 今日、本月、累计、各条线、"
@@ -495,7 +493,12 @@ class PostgresTelegramState:
                            WHEN 'SHORT_TERM_2' THEN 2
                            WHEN 'CUSTOM_1' THEN 3
                            WHEN 'CUSTOM_2' THEN 4
-                           ELSE 5
+                           WHEN 'CUSTOM_3' THEN 5
+                           WHEN 'CUSTOM_4' THEN 6
+                           WHEN 'CUSTOM_5' THEN 7
+                           WHEN 'CUSTOM_6' THEN 8
+                           WHEN 'CUSTOM_7' THEN 9
+                           ELSE 10
                          END
                     ), latest_positions AS (
                       SELECT DISTINCT ON (lead_portfolio_id,symbol,position_side)
@@ -531,7 +534,12 @@ class PostgresTelegramState:
                          WHEN 'SHORT_TERM_2' THEN 2
                          WHEN 'CUSTOM_1' THEN 3
                          WHEN 'CUSTOM_2' THEN 4
-                         ELSE 5
+                         WHEN 'CUSTOM_3' THEN 5
+                         WHEN 'CUSTOM_4' THEN 6
+                         WHEN 'CUSTOM_5' THEN 7
+                         WHEN 'CUSTOM_6' THEN 8
+                         WHEN 'CUSTOM_7' THEN 9
+                         ELSE 10
                        END,
                        leaders.lead_portfolio_id
                     """,
@@ -1084,34 +1092,35 @@ class PostgresTelegramState:
                 locked_leader_ids = _current_leader_locks(cursor)
         except psycopg.Error as error:
             raise TelegramStateError("TELEGRAM_LEADER_MANAGEMENT_READ_FAILED") from error
-        cards: list[str] = []
-        for slot in LeaderSlot:
+        slot_lines: list[str] = []
+        for number, slot in enumerate(LeaderSlot, start=1):
             leader_id = slots.get(slot)
             if leader_id is None:
-                cards.append(f"{leader_slot_label(slot)}\n状态: 空缺")
+                slot_lines.append(f"{number}. {leader_slot_label(slot)} | 空缺")
                 continue
             row = rows.get(leader_id)
             if row is None:
-                cards.append(
-                    f"{leader_slot_label(slot)} · 名称未知\nID: {leader_id}\n状态: 资料缺失"
+                slot_lines.append(
+                    f"{number}. {leader_slot_label(slot)} | 名称未知 | ID {leader_id} | 资料缺失"
                 )
                 continue
-            cards.append(
-                f"{leader_slot_label(slot)} · {_safe_text(str(row['nickname']), 24)}\n"
-                f"ID: {leader_id}\n"
-                f"状态: {row['state']} | "
-                f"自动换人: {'已锁定' if leader_id in locked_leader_ids else '未锁定'} | "
-                f"跟单: {row['follow_multiplier']}倍 | "
-                f"仓位: {compact_decimal(row['quantity'])}\n"
-                f"胜率: {compact_decimal(row['win_rate_pct'])}% | "
-                f"回撤: {compact_decimal(row['maximum_drawdown_pct'])}%"
+            replacement_state = (
+                "手动"
+                if is_custom_slot(slot)
+                else ("🔒" if leader_id in locked_leader_ids else "🔓")
             )
-        body = _render_cards("🛠 带单员席位管理", cards)
+            slot_lines.append(
+                f"{number}. {leader_slot_label(slot)} | "
+                f"{_safe_text(str(row['nickname']), 18)} | ID {leader_id} | "
+                f"{replacement_state} | {row['follow_multiplier']}倍 | "
+                f"仓 {compact_decimal(row['quantity'])}"
+            )
+        body = "\n".join(["🛠 带单员槽位 (10)", *slot_lines])
         return (
             f"{body}\n{_CARD_DIVIDER}\n"
-            "💡 长线周日 00:00 综合评估; 短线每日 00:00 分别按最高胜率/日内综合评估。\n"
-            "自动换人遇到旧仓位会等待: 长线 1 天、短线 2 小时; 超时仍未平仓则取消。\n"
-            "🎯 两个自定义槽位只接受你的手动设置, 自动选人永不修改。"
+            "点击下方 1-10 号按钮进入对应槽位; 🔒/🔓 表示自动换人锁定状态。\n"
+            "1号长线周日评估, 2-3号短线每日评估; "
+            "4-10号自定义槽位只接受手动设置, 自动选人永不修改。"
         )
 
     def leader_lock_choices(self) -> tuple[LeaderLockChoice, ...]:
@@ -1175,9 +1184,7 @@ class PostgresTelegramState:
             with self._connect() as connection, connection.cursor() as cursor:
                 slots = _current_slots(cursor)
                 automatic_leader_ids = {
-                    leader_id
-                    for slot, leader_id in slots.items()
-                    if not is_custom_slot(slot)
+                    leader_id for slot, leader_id in slots.items() if not is_custom_slot(slot)
                 }
                 if lead_portfolio_id not in automatic_leader_ids:
                     raise ValueError("Telegram leader lock target is no longer assigned")
@@ -1384,18 +1391,15 @@ class PostgresTelegramState:
 
     def leader_multiplier_text(self) -> str:
         choices = self.leader_multiplier_choices()
-        cards = [
-            f"{choice.button_label}\nID: {choice.lead_portfolio_id} | "
-            f"当前: {choice.current_multiplier}倍"
-            for choice in choices
+        lines = [
+            f"{number}. {choice.button_label} | ID {choice.lead_portfolio_id} | "
+            f"{choice.current_multiplier}倍"
+            for number, choice in enumerate(choices, start=1)
         ]
-        body = _render_cards(
-            "📐 带单员跟单金额倍数",
-            cards,
-            empty="当前没有可配置的在选带单员",
-        )
+        body = "\n".join(["📐 带单员跟单金额倍数", *(lines or ["当前没有可配置的在选带单员"])])
         return (
             f"{body}\n{_CARD_DIVIDER}\n"
+            "点击下方对应序号设置倍数。\n"
             "倍数绑定带单员 ID, 不绑定席位。换人后不会继承; 未配置默认为1倍。\n"
             "只影响后续新信号, 已有仓位和待入场订单不会改变。"
         )
@@ -1866,6 +1870,7 @@ class PostgresTelegramState:
         user_id: int,
         slot: LeaderSlot,
         lead_portfolio_id: str | None,
+        manual_override: bool = False,
     ) -> LeaderChangeProposal:
         if user_id <= 0:
             raise ValueError("Telegram leader manager user ID is invalid")
@@ -1890,12 +1895,12 @@ class PostgresTelegramState:
                     if lead_portfolio_id is None:
                         raise ValueError("Telegram leader portfolio ID is required")
                     if slots.get(slot) == lead_portfolio_id:
-                        raise ValueError("Telegram leader slot already has this leader")
+                        raise ValueError("COPY_TELEGRAM_LEADER_ALREADY_IN_SLOT")
                     if any(
                         other_slot is not slot and value == lead_portfolio_id
                         for other_slot, value in slots.items()
                     ):
-                        raise ValueError("Telegram leader is assigned to another slot")
+                        raise ValueError("COPY_TELEGRAM_LEADER_ASSIGNED_ELSEWHERE")
                     cursor.execute(
                         """
                         WITH snapshot AS (
@@ -1925,21 +1930,23 @@ class PostgresTelegramState:
                         (lead_portfolio_id, lead_portfolio_id),
                     )
                     row = cursor.fetchone()
-                    if row is None or (
-                        not is_custom_slot(slot)
+                    if row is None:
+                        raise ValueError("COPY_TELEGRAM_LEADER_EVIDENCE_UNAVAILABLE")
+                    if (
+                        not manual_override
+                        and not is_custom_slot(slot)
                         and int(row["testnet_symbol_compatibility_pct"]) < 80
                     ):
-                        raise ValueError("Telegram leader candidate evidence is unavailable")
+                        raise ValueError("COPY_TELEGRAM_LEADER_SYMBOL_COMPATIBILITY_LOW")
                     if _current_lifecycle(
                         cursor, lead_portfolio_id
                     ) is LeaderLifecycle.DRAINING and _leader_has_position(
                         cursor, lead_portfolio_id
                     ):
-                        raise ValueError(
-                            "Telegram draining leader with a position cannot be reused"
-                        )
+                        raise ValueError("COPY_TELEGRAM_LEADER_DRAINING_WITH_POSITION")
                     if (
-                        slot is not LeaderSlot.LONG_TERM
+                        not manual_override
+                        and slot is not LeaderSlot.LONG_TERM
                         and not is_custom_slot(slot)
                         and not (
                             int(row["orders_1d"]) >= 3
@@ -1948,7 +1955,7 @@ class PostgresTelegramState:
                             and int(row["active_days_7d"]) >= 3
                         )
                     ):
-                        raise ValueError("Telegram short leader is not active enough")
+                        raise ValueError("COPY_TELEGRAM_SHORT_LEADER_ACTIVITY_LOW")
                     display = (
                         f"将 {leader_slot_label(slot)} 设置为 "
                         f"{_safe_text(str(row['nickname']), 32)} (ID {lead_portfolio_id})\n"
@@ -1990,7 +1997,13 @@ class PostgresTelegramState:
         return LeaderChangeProposal(
             nonce=nonce,
             confirmation_text=(
-                f"⚠️ 确认带单员变更\n{display}\n\n新带单员先建立基线; 旧带单员有仓位时只排空不强平。"
+                f"⚠️ 确认带单员变更\n{display}\n\n"
+                + (
+                    "这是人工强制配置, 已跳过自动选人门槛。\n"
+                    if manual_override and action == "SET"
+                    else ""
+                )
+                + "新带单员先建立基线; 旧带单员有仓位时只排空不强平。"
             ),
         )
 
@@ -2320,7 +2333,14 @@ class PostgresTelegramState:
                              ORDER BY CASE slot WHEN 'LONG_TERM' THEN 0
                                                 WHEN 'SHORT_TERM_1' THEN 1
                                                 WHEN 'SHORT_TERM_2' THEN 2
-                                                WHEN 'CUSTOM_1' THEN 3 ELSE 4 END
+                                                WHEN 'CUSTOM_1' THEN 3
+                                                WHEN 'CUSTOM_2' THEN 4
+                                                WHEN 'CUSTOM_3' THEN 5
+                                                WHEN 'CUSTOM_4' THEN 6
+                                                WHEN 'CUSTOM_5' THEN 7
+                                                WHEN 'CUSTOM_6' THEN 8
+                                                WHEN 'CUSTOM_7' THEN 9
+                                                ELSE 10 END
                              LIMIT 1) AS slot
                     """,
                     (lead_portfolio_id, lead_portfolio_id, lead_portfolio_id),
@@ -2554,31 +2574,46 @@ class PostgresTelegramState:
                             WHEN 'SHORT_TERM_2' THEN 2
                             WHEN 'CUSTOM_1' THEN 3
                             WHEN 'CUSTOM_2' THEN 4
-                            ELSE 5
+                            WHEN 'CUSTOM_3' THEN 5
+                            WHEN 'CUSTOM_4' THEN 6
+                            WHEN 'CUSTOM_5' THEN 7
+                            WHEN 'CUSTOM_6' THEN 8
+                            WHEN 'CUSTOM_7' THEN 9
+                            ELSE 10
                           END,
                           lifecycle.state,lifecycle.lead_portfolio_id
                 """,
                 (),
             )
             rows = list(cursor.fetchall())
-        cards: list[str] = []
+        lines: list[str] = []
         for row in rows:
-            nickname = _safe_text(str(row["nickname"]), 30)
-            slot = (
-                leader_slot_label(LeaderSlot(str(row["slot"])))
-                if row["slot"] is not None
-                else "排空"
+            nickname = _safe_text(str(row["nickname"]), 22)
+            if row["slot"] is None:
+                slot_text = "⏳ 排空"
+            else:
+                slot_value = LeaderSlot(str(row["slot"]))
+                slot_text = (
+                    f"{tuple(LeaderSlot).index(slot_value) + 1}. {leader_slot_label(slot_value)}"
+                )
+            lifecycle = {
+                "OBSERVE_ONLY": "建基线",
+                "ACTIVE": "跟单中",
+                "DRAINING": "排空中",
+            }.get(str(row["state"]), str(row["state"]))
+            lines.append(
+                f"{slot_text} | {nickname} | {lifecycle}\n"
+                f"ID {row['lead_portfolio_id']} | "
+                f"胜 {compact_decimal(row['win_rate_pct'], maximum_places=2)}% | "
+                f"回撤 {compact_decimal(row['maximum_drawdown_pct'], maximum_places=2)}% | "
+                f"ROI {compact_decimal(row['roi_pct'], maximum_places=2)}%"
             )
-            cards.append(
-                f"{slot} · {nickname}\n"
-                f"状态: {row['state']}\n"
-                f"ID: {row['lead_portfolio_id']}\n"
-                "【表现数据】\n"
-                f"胜率: {compact_decimal(row['win_rate_pct'])}%\n"
-                f"回撤: {compact_decimal(row['maximum_drawdown_pct'])}%\n"
-                f"ROI: {compact_decimal(row['roi_pct'])}%"
-            )
-        return _render_cards("👥 当前带单员", cards, empty="👥 当前没有带单员")
+        if not lines:
+            return "👥 当前没有带单员"
+        return (
+            "\n".join(["👥 当前带单员", *lines])
+            + f"\n{_CARD_DIVIDER}\n点击“管理带单员”按 1-10 号槽位查看和修改。"
+        )
 
     def _positions(
         self,
@@ -2964,9 +2999,7 @@ class PostgresTelegramState:
             valuation = cursor.fetchone()
             configured_entry_limit = _current_entry_margin_limit(cursor)
         operating_envelope = (
-            Decimal(str(envelope["operating_envelope_usdt"]))
-            if envelope
-            else Decimal("150")
+            Decimal(str(envelope["operating_envelope_usdt"])) if envelope else Decimal("150")
         )
         logical_equity = operating_envelope
         if valuation:
@@ -2986,9 +3019,7 @@ class PostgresTelegramState:
                     str(valuation["exchange_available_balance_usdt"])
                 ),
                 logical_equity_usdt=logical_equity,
-                total_initial_margin_usdt=Decimal(
-                    str(valuation["total_initial_margin_usdt"])
-                ),
+                total_initial_margin_usdt=Decimal(str(valuation["total_initial_margin_usdt"])),
             )
             if valuation
             else operating_envelope
@@ -3204,7 +3235,14 @@ class PostgresTelegramState:
                  ORDER BY CASE latest.slot WHEN 'LONG_TERM' THEN 0
                                       WHEN 'SHORT_TERM_1' THEN 1
                                       WHEN 'SHORT_TERM_2' THEN 2
-                                      WHEN 'CUSTOM_1' THEN 3 ELSE 4 END
+                                      WHEN 'CUSTOM_1' THEN 3
+                                      WHEN 'CUSTOM_2' THEN 4
+                                      WHEN 'CUSTOM_3' THEN 5
+                                      WHEN 'CUSTOM_4' THEN 6
+                                      WHEN 'CUSTOM_5' THEN 7
+                                      WHEN 'CUSTOM_6' THEN 8
+                                      WHEN 'CUSTOM_7' THEN 9
+                                      ELSE 10 END
                 """,
                 (),
             )
@@ -3248,18 +3286,12 @@ class PostgresTelegramState:
         envelope = Decimal(str(row["operating_envelope_usdt"]))
         displayed_equity = _rebased_logical_equity(envelope, total)
         account_unoccupied = logical_available_balance(
-            exchange_available_balance_usdt=Decimal(
-                str(row["exchange_available_balance_usdt"])
-            ),
+            exchange_available_balance_usdt=Decimal(str(row["exchange_available_balance_usdt"])),
             logical_equity_usdt=displayed_equity,
             total_initial_margin_usdt=Decimal(str(row["total_initial_margin_usdt"])),
         )
-        committed_margin = (
-            Decimal(str(margin_usage["committed"])) if margin_usage else Decimal("0")
-        )
-        pending_margin = (
-            Decimal(str(margin_usage["pending"])) if margin_usage else Decimal("0")
-        )
+        committed_margin = Decimal(str(margin_usage["committed"])) if margin_usage else Decimal("0")
+        pending_margin = Decimal(str(margin_usage["pending"])) if margin_usage else Decimal("0")
         used_entry_margin = committed_margin + pending_margin
         available_entry_margin = available_entry_margin_balance(
             account_unoccupied_usdt=account_unoccupied,
@@ -3294,32 +3326,22 @@ class PostgresTelegramState:
         line_by_slot = {str(item["slot"]): item for item in line_rows}
         for slot in LeaderSlot:
             item = line_by_slot.get(slot.value)
-            leader_id = str(item["lead_portfolio_id"]) if item and item["lead_portfolio_id"] else ""
-            nickname = _safe_text(str(item["nickname"] or "名称未知"), 32) if item else "当前空缺"
-            line_raw_total = Decimal(str(item["total_pnl_usdt"])) if item else Decimal("0")
-            line_total = (
-                line_raw_total - Decimal(str(item["reset_total_pnl_usdt"]))
-                if item
-                else Decimal("0")
-            )
-            line_today = (
-                line_raw_total - Decimal(str(item["day_anchor_pnl_usdt"]))
-                if item
-                else Decimal("0")
-            )
-            line_month = (
-                line_raw_total - Decimal(str(item["month_anchor_pnl_usdt"]))
-                if item
-                else Decimal("0")
-            )
-            identity = f"当前: {nickname}\nID: {leader_id}" if leader_id else nickname
+            if item is None or not item["lead_portfolio_id"]:
+                continue
+            leader_id = str(item["lead_portfolio_id"])
+            nickname = _safe_text(str(item["nickname"] or leader_id), 32)
+            line_raw_total = Decimal(str(item["total_pnl_usdt"]))
+            line_total = line_raw_total - Decimal(str(item["reset_total_pnl_usdt"]))
+            line_today = line_raw_total - Decimal(str(item["day_anchor_pnl_usdt"]))
+            line_month = line_raw_total - Decimal(str(item["month_anchor_pnl_usdt"]))
+            identity = f"当前: {nickname}\nID: {leader_id}"
             card = (
                 f"{leader_slot_label(slot)} · {identity}\n"
                 f"本线今日: {signed_money(line_today)} U\n"
                 f"本线本月: {signed_money(line_month)} U\n"
                 f"本线累计: {signed_money(line_total)} U"
             )
-            if item and not item["mark_complete"]:
+            if not item["mark_complete"]:
                 card += "\n⚠️ 部分未实现盈亏缺少标记价"
             line_cards.append(card)
         line_summary = _render_cards(
@@ -3513,9 +3535,9 @@ class PostgresTelegramState:
             f"时间: {_display_shanghai_time(row['occurred_at'])}\n"
             f"批次: {str(row['selection_run_id'])[:12]}\n"
             f"报告校验: {str(row['codex_report_digest'])[:12]}\n"
-            "当前策略: 跟单人数作为边际递减的市场认可度加分; "
-            "长线/短线1/短线2分别占综合分10%/8%/7%, "
-            "但不能覆盖回撤、盈亏质量、样本和活跃度门槛。"
+            "当前策略: 遍历全部公开带单员目录; 自动候选至少有200名当前跟单者; "
+            "通过回撤、盈亏质量、样本和活跃度门槛后以跟单人数为第一排序依据; "
+            "三条自动线的市场认可度均占综合分35%; 全部槽位禁止带单员重复。"
         )
 
     def _control(self) -> str:
@@ -3874,9 +3896,7 @@ def _notification_text_raw(
                     deadline = _display_shanghai_time(item.get("expires_at"))
                     outcome = f"旧带单员 {incumbent_name} 有仓位, 等待平仓至 {deadline}"
                 elif status == "BLOCKED_BY_LEADER_LOCK":
-                    outcome = (
-                        f"当前带单员 {incumbent_name} 已锁定, 本轮保留且继续正常跟单"
-                    )
+                    outcome = f"当前带单员 {incumbent_name} 已锁定, 本轮保留且继续正常跟单"
                 else:
                     outcome = status
                 card_lines = [_CARD_DIVIDER, slot_label]
@@ -3941,9 +3961,7 @@ def _notification_text_raw(
             result = "旧带单员已在期限内清仓, 替换成功"
         elif state == "EXPIRED":
             result = "等待期限已到但旧带单员仍有仓位, 本轮取消更换"
-        elif "COPY_SLOT_REPLACEMENT_CANCELLED_BY_LEADER_LOCK" in payload.get(
-            "reason_codes", []
-        ):
+        elif "COPY_SLOT_REPLACEMENT_CANCELLED_BY_LEADER_LOCK" in payload.get("reason_codes", []):
             result = "旧带单员已锁定, 本轮自动换人已取消; 跟单继续正常运行"
         else:
             result = "槽位或候选状态已变化, 本轮待替换已取消"
@@ -3963,9 +3981,10 @@ def _notification_text_raw(
     if payload.get("event") == "copy_pnl_reset":
         operating_envelope = compact_money(payload.get("operating_envelope_usdt", "150"))
         margin_line = ""
-        if payload.get("logical_available_usdt") is not None and payload.get(
-            "total_initial_margin_usdt"
-        ) is not None:
+        if (
+            payload.get("logical_available_usdt") is not None
+            and payload.get("total_initial_margin_usdt") is not None
+        ):
             logical_available = compact_money(payload["logical_available_usdt"])
             initial_margin = compact_money(payload["total_initial_margin_usdt"])
             margin_line = (
@@ -4358,8 +4377,7 @@ def _signal_system_action(
         return "只保存带单员信号, 当前运行模式不会向 Binance 提交订单"
     if state == "RISK_REJECTED" and "COPY_TRADIFI_AGREEMENT_REQUIRED" in reason_codes:
         return (
-            "Binance 已在撮合前拒绝请求; 系统确认原订单未生成、未成交且无仓位残留, "
-            "不会自动反复下单"
+            "Binance 已在撮合前拒绝请求; 系统确认原订单未生成、未成交且无仓位残留, 不会自动反复下单"
         )
     if state in {"IGNORED_MINIMUM", "IGNORED_DRAINING", "RISK_REJECTED"}:
         return "未向 Binance 提交订单"
@@ -4630,8 +4648,7 @@ def _net_account_adjustment(
 
     line_gross_pnl = sum(
         (
-            Decimal(str(row["total_pnl_usdt"]))
-            - Decimal(str(row.get("reset_total_pnl_usdt") or 0))
+            Decimal(str(row["total_pnl_usdt"])) - Decimal(str(row.get("reset_total_pnl_usdt") or 0))
             for row in line_rows
         ),
         Decimal("0"),
@@ -4660,8 +4677,7 @@ def _account_pnl_since_reset(
         raw_total - Decimal(str(row["month_anchor_pnl_usdt"])),
         Decimal(str(row["realized_net_pnl_usdt"]))
         - Decimal(str(row["reset_realized_net_pnl_usdt"])),
-        Decimal(str(row["unrealized_pnl_usdt"]))
-        - Decimal(str(row["reset_unrealized_pnl_usdt"])),
+        Decimal(str(row["unrealized_pnl_usdt"])) - Decimal(str(row["reset_unrealized_pnl_usdt"])),
     )
 
 

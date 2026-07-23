@@ -147,6 +147,25 @@ def test_copy_custom_slots_expand_every_durable_slot_constraint() -> None:
         assert table in migration
 
 
+def test_copy_ten_slots_expand_every_durable_slot_constraint() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "migrations/business/versions/0031_ten_leader_slots.py").read_text()
+
+    assert 'revision = "0031_ten_leader_slots"' in migration
+    assert 'down_revision = "0030_account_summary_reset"' in migration
+    assert "CUSTOM_3" in migration
+    assert "CUSTOM_7" in migration
+    for table in (
+        "leader_slot_events",
+        "telegram_leader_challenges",
+        "leader_pnl_events",
+        "line_valuation_events",
+        "leader_pnl_slot_correction_events",
+        "slot_replacement_events",
+    ):
+        assert table in migration
+
+
 def test_copy_source_resolution_epochs_are_append_only() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (
@@ -193,9 +212,9 @@ def test_leader_lock_is_durable_two_step_and_append_only() -> None:
 
 def test_locked_slot_backup_is_durable_and_advisory() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations/business/versions/0026_locked_slot_backup.py"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations/business/versions/0026_locked_slot_backup.py").read_text(
+        encoding="utf-8"
+    )
 
     assert 'revision = "0026_locked_slot_backup"' in migration
     assert 'down_revision = "0025_leader_lock"' in migration
@@ -321,9 +340,9 @@ def test_persistent_protected_entry_migration_allows_gtc_claims() -> None:
 
 def test_entry_margin_limit_is_bounded_two_step_and_append_only() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations/business/versions/0029_configurable_entry_margin.py"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations/business/versions/0029_configurable_entry_margin.py").read_text(
+        encoding="utf-8"
+    )
 
     assert 'revision = "0029_entry_margin_limit"' in migration
     assert 'down_revision = "0028_persistent_entries"' in migration
@@ -339,9 +358,9 @@ def test_entry_margin_limit_is_bounded_two_step_and_append_only() -> None:
 
 def test_account_summary_reset_extends_the_existing_two_step_challenge() -> None:
     root = Path(__file__).resolve().parents[2]
-    migration = (
-        root / "migrations/business/versions/0030_account_summary_reset.py"
-    ).read_text(encoding="utf-8")
+    migration = (root / "migrations/business/versions/0030_account_summary_reset.py").read_text(
+        encoding="utf-8"
+    )
 
     assert 'revision = "0030_account_summary_reset"' in migration
     assert 'down_revision = "0029_entry_margin_limit"' in migration

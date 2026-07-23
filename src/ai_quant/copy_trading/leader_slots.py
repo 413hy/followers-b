@@ -14,6 +14,11 @@ class LeaderSlot(StrEnum):
     SHORT_TERM_2 = "SHORT_TERM_2"
     CUSTOM_1 = "CUSTOM_1"
     CUSTOM_2 = "CUSTOM_2"
+    CUSTOM_3 = "CUSTOM_3"
+    CUSTOM_4 = "CUSTOM_4"
+    CUSTOM_5 = "CUSTOM_5"
+    CUSTOM_6 = "CUSTOM_6"
+    CUSTOM_7 = "CUSTOM_7"
 
 
 class SelectionStrategy(StrEnum):
@@ -31,8 +36,7 @@ _CALLBACK_TO_SLOT = {
     "long": LeaderSlot.LONG_TERM,
     "short1": LeaderSlot.SHORT_TERM_1,
     "short2": LeaderSlot.SHORT_TERM_2,
-    "custom1": LeaderSlot.CUSTOM_1,
-    "custom2": LeaderSlot.CUSTOM_2,
+    **{f"custom{number}": LeaderSlot[f"CUSTOM_{number}"] for number in range(1, 8)},
 }
 
 
@@ -51,17 +55,18 @@ def leader_slot_callback(slot: LeaderSlot) -> str:
 
 
 def leader_slot_label(slot: LeaderSlot) -> str:
-    return {
+    automatic_label = {
         LeaderSlot.LONG_TERM: "🔒 长线",
         LeaderSlot.SHORT_TERM_1: "⚡ 短线 1",
         LeaderSlot.SHORT_TERM_2: "⚡ 短线 2",
-        LeaderSlot.CUSTOM_1: "🎯 自定义 1",
-        LeaderSlot.CUSTOM_2: "🎯 自定义 2",
-    }[slot]
+    }.get(slot)
+    if automatic_label is not None:
+        return automatic_label
+    return f"🎯 自定义 {slot.value.removeprefix('CUSTOM_')}"
 
 
 def is_custom_slot(slot: LeaderSlot) -> bool:
-    return slot in {LeaderSlot.CUSTOM_1, LeaderSlot.CUSTOM_2}
+    return slot.value.startswith("CUSTOM_")
 
 
 def slot_replacement_wait(slot: LeaderSlot) -> timedelta:

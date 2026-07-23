@@ -5,7 +5,11 @@ from decimal import Decimal
 
 from ai_quant.copy_trading.codex_selection import CandidateOrderProfile, candidate_document
 from ai_quant.copy_trading.models import LeaderSnapshot, PublicLeaderOrder
-from ai_quant.copy_trading.selection import assess_candidate, copy_social_proof_score
+from ai_quant.copy_trading.selection import (
+    SelectionPolicy,
+    assess_candidate,
+    copy_social_proof_score,
+)
 from ai_quant.copy_trading.selection_quality import (
     LONG_TERM,
     SHORT_TERM_INTRADAY,
@@ -108,7 +112,7 @@ def test_repeatable_close_profile_passes_all_three_objective_gates() -> None:
         _close_orders(pnls),
         observed_at_ms=now_ms,
     )
-    leader = _leader(win_rate="85", drawdown="5")
+    leader = _leader(win_rate="85", drawdown="5", current_copy_count=300)
 
     assessments = tuple(
         assess_selection_quality(
@@ -166,6 +170,18 @@ def test_established_copy_following_adds_bounded_social_proof_to_all_scores() ->
     assert document["current_copy_count"] == 600
     assert document["maximum_copy_count"] == 600
     assert document["copy_social_proof_score"] == "100.000000"
+
+
+def test_automatic_policy_can_reject_too_few_current_followers() -> None:
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    assessment = assess_candidate(
+        _leader(current_copy_count=199),
+        observed_at_ms=now_ms,
+        policy=SelectionPolicy(minimum_current_copy_count=200),
+    )
+
+    assert not assessment.eligible
+    assert "COPY_SELECTION_FOLLOWER_COUNT_LOW" in assessment.reason_codes
 
 
 def test_fast_public_drawdown_and_roi_deterioration_downranks_candidate() -> None:

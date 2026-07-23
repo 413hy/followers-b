@@ -55,6 +55,14 @@ class _ProfiledCandidate:
     quality: Mapping[str, SelectionQualityAssessment]
 
 
+@dataclass(frozen=True, slots=True)
+class _CandidateDirectory:
+    leaders: tuple[LeaderSnapshot, ...]
+    public_total: int
+    valid_total: int
+    invalid_row_count: int
+
+
 def _trigger_codex_audit() -> bool:
     # Selection and the scheduled hourly audit both run at Shanghai 00:00. A plain
     # start can be coalesced into the already-running audit, which then never sees
@@ -111,12 +119,12 @@ def _private_text(path: Path, repository_root: Path) -> str:
 
 def _short_win_rate_key(
     item: _ProfiledCandidate,
-) -> tuple[Decimal, Decimal, int, int, Decimal]:
+) -> tuple[int, Decimal, Decimal, int, Decimal]:
     quality = item.quality[SHORT_TERM_WIN_RATE]
     return (
+        item.leader.current_copy_count,
         quality.score,
         item.leader.win_rate_pct,
-        item.leader.current_copy_count,
         item.activity.profitable_close_count,
         -item.leader.maximum_drawdown_pct,
     )
@@ -134,6 +142,7 @@ def _public_policy(strategy: SelectionStrategy) -> SelectionPolicy:
             Decimal("10000") if strategy is SelectionStrategy.LONG_TERM else Decimal("7500")
         ),
         minimum_track_record_days=(30 if strategy is SelectionStrategy.LONG_TERM else 18),
+        minimum_current_copy_count=200,
     )
 
 
@@ -149,50 +158,52 @@ def _candidate_directory(
     strategy: SelectionStrategy,
     candidate_pool_size: int,
     observed_at_ms: int,
-) -> tuple[LeaderSnapshot, ...]:
-    merged: dict[str, LeaderSnapshot] = {}
-    for data_type in ("ROI", "WIN_RATE", "MDD"):
-        page = public.list_leaders(
-            page_size=min(candidate_pool_size, 100),
-            time_range="30D",
-            data_type=data_type,
-            skip_invalid_rows=True,
+) -> _CandidateDirectory:
+    directory = public.list_all_leaders(
+        time_range="30D",
+        data_type="ROI",
+        maximum_pages=400,
+    )
+    if directory.invalid_row_count:
+        print(
+            json.dumps(
+                {
+                    "event": "copy_selection_invalid_candidates_skipped",
+                    "source": "FULL_PUBLIC_DIRECTORY",
+                    "count": directory.invalid_row_count,
+                    "reason_codes": list(directory.invalid_reason_codes),
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
         )
-        if page.invalid_row_count:
-            print(
-                json.dumps(
-                    {
-                        "event": "copy_selection_invalid_candidates_skipped",
-                        "ranking": data_type,
-                        "count": page.invalid_row_count,
-                        "reason_codes": list(page.invalid_reason_codes),
-                    },
-                    separators=(",", ":"),
-                ),
-                flush=True,
-            )
-        for leader in page.leaders:
-            merged.setdefault(leader.lead_portfolio_id, leader)
-    if not merged:
+    if not directory.leaders:
         raise BinancePublicCopyError("COPY_SELECTION_DIRECTORY_NO_VALID_CANDIDATES")
     policy = _public_policy(strategy)
     directory_assessments = {
-        leader_id: assess_candidate(
+        leader.lead_portfolio_id: assess_candidate(
             leader,
             observed_at_ms=observed_at_ms,
             policy=policy,
         )
-        for leader_id, leader in merged.items()
+        for leader in directory.leaders
     }
-    return tuple(
+    leaders = tuple(
         sorted(
-            merged.values(),
+            directory.leaders,
             key=lambda leader: (
                 directory_assessments[leader.lead_portfolio_id].eligible,
+                leader.current_copy_count,
                 directory_assessments[leader.lead_portfolio_id].deterministic_score,
             ),
             reverse=True,
         )[:candidate_pool_size]
+    )
+    return _CandidateDirectory(
+        leaders=leaders,
+        public_total=directory.total,
+        valid_total=len(directory.leaders),
+        invalid_row_count=directory.invalid_row_count,
     )
 
 
@@ -252,12 +263,13 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
         leader_id for slot, leader_id in current_slots.items() if slot not in strategy.slots
     }
     observed_at_ms = int(now.timestamp() * 1000)
-    leaders = _candidate_directory(
+    directory = _candidate_directory(
         public,
         strategy=strategy,
         candidate_pool_size=arguments.candidate_pool_size,
         observed_at_ms=observed_at_ms,
     )
+    leaders = directory.leaders
     policy = _public_policy(strategy)
     catalog = (
         BinanceProductionCatalogClient()
@@ -312,7 +324,12 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             if leader.lead_portfolio_id not in excluded_leader_ids
             and assessments[leader.lead_portfolio_id].eligible
         ),
-        key=lambda leader: assessments[leader.lead_portfolio_id].deterministic_score,
+        # Current follower count is the primary ranking signal after public safety
+        # gates. The composite score breaks ties and keeps quality visible.
+        key=lambda leader: (
+            leader.current_copy_count,
+            assessments[leader.lead_portfolio_id].deterministic_score,
+        ),
         reverse=True,
     )
     profiled: list[_ProfiledCandidate] = []
@@ -447,6 +464,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
                 item
                 for item in profiled
                 if item.quality[SHORT_TERM_WIN_RATE].eligible
+                and item.leader.lead_portfolio_id not in set(current_slots.values())
             ]
             short_1_pool.sort(key=_short_win_rate_key, reverse=True)
             short_1_reviewed = short_1_pool[: arguments.review_pool_size]
@@ -492,15 +510,19 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
         short_2_reviewed: list[_ProfiledCandidate] = []
         if current_short_2 is not None and current_short_2 in locked_leader_ids:
             short_2_id = current_short_2
+            reserved_leader_ids = set(current_slots.values()) | set(
+                backup_leader_ids.values()
+            )
             short_2_pool = [
                 item
                 for item in profiled
                 if item.quality[SHORT_TERM_INTRADAY].eligible
+                and item.leader.lead_portfolio_id not in reserved_leader_ids
             ]
             short_2_pool.sort(
                 key=lambda item: (
-                    item.quality[SHORT_TERM_INTRADAY].score,
                     item.leader.current_copy_count,
+                    item.quality[SHORT_TERM_INTRADAY].score,
                     item.activity.active_days_7d,
                     item.activity.orders_3d,
                     item.activity.orders_1d,
@@ -539,8 +561,8 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             ]
             short_2_pool.sort(
                 key=lambda item: (
-                    item.quality[SHORT_TERM_INTRADAY].score,
                     item.leader.current_copy_count,
+                    item.quality[SHORT_TERM_INTRADAY].score,
                     item.activity.active_days_7d,
                     item.activity.orders_3d,
                     item.activity.orders_1d,
@@ -558,6 +580,37 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             )
             short_2_id = short_2_result.selected_leader_ids[0]
             short_2_document = short_2_result.document
+        short_1_slot = strategy.slots[0]
+        if backup_leader_ids.get(short_1_slot) == short_2_id:
+            # An active short-term assignment has priority over an advisory backup.
+            # Re-select the locked slot's backup from the remaining unassigned pool.
+            short_1_reviewed = [
+                item
+                for item in short_1_reviewed
+                if item.leader.lead_portfolio_id != short_2_id
+            ]
+            if short_1_reviewed:
+                short_1_result = selector.select(
+                    tuple(item.document for item in short_1_reviewed),
+                    leader_count=1,
+                    strategy="SHORT_TERM_WIN_RATE",
+                )
+                short_1_backup = short_1_result.selected_leader_ids[0]
+                backup_leader_ids[short_1_slot] = short_1_backup
+                short_1_document = {
+                    "state": "LOCKED_RETAINED_WITH_BACKUP",
+                    "lead_portfolio_id": current_short_1,
+                    "backup_lead_portfolio_id": short_1_backup,
+                    "backup_codex_review": short_1_result.document,
+                    "reason_codes": ["COPY_SELECTION_LOCKED_SLOT_BACKUP_SELECTED"],
+                }
+            else:
+                backup_leader_ids.pop(short_1_slot, None)
+                short_1_document = {
+                    "state": "LOCKED_RETAINED_BACKUP_UNAVAILABLE",
+                    "lead_portfolio_id": current_short_1,
+                    "reason_codes": ["COPY_SELECTION_LOCKED_SLOT_BACKUP_UNAVAILABLE"],
+                }
         selected_leader_ids = (
             short_1_id,
             short_2_id,
@@ -566,7 +619,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             "schema_version": "1.0.0",
             "selection_strategy": "SHORT_TERM_SPLIT",
             "short_term_1": {
-                "objective": "HIGHEST_CREDIBLE_WIN_RATE",
+                "objective": "FOLLOWER_FIRST_CREDIBLE_WIN_RATE",
                 "codex_review": short_1_document,
             },
             "short_term_2": short_2_document,
@@ -590,7 +643,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
         current_long = current_slots.get(strategy.slots[0])
         if current_long is not None and current_long in locked_leader_ids:
             profiled.sort(
-                key=lambda item: item.quality[LONG_TERM].score,
+                key=lambda item: (
+                    item.leader.current_copy_count,
+                    item.quality[LONG_TERM].score,
+                ),
                 reverse=True,
             )
             reviewed = profiled[: arguments.review_pool_size]
@@ -630,7 +686,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             report_digest = _document_digest(result_document)
         else:
             profiled.sort(
-                key=lambda item: item.quality[LONG_TERM].score,
+                key=lambda item: (
+                    item.leader.current_copy_count,
+                    item.quality[LONG_TERM].score,
+                ),
                 reverse=True,
             )
             reviewed = profiled[: arguments.review_pool_size]
@@ -645,6 +704,14 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             result_document = long_result.document
             candidate_digest = long_result.candidate_digest
             report_digest = long_result.report_digest
+    if len(set(selected_leader_ids)) != len(selected_leader_ids):
+        raise RuntimeError("COPY_SELECTION_DUPLICATE_LEADER")
+    if set(selected_leader_ids) & excluded_leader_ids:
+        raise RuntimeError("COPY_SELECTION_LEADER_ASSIGNED_TO_OTHER_LINE")
+    if len(set(backup_leader_ids.values())) != len(backup_leader_ids):
+        raise RuntimeError("COPY_SELECTION_DUPLICATE_BACKUP_LEADER")
+    if set(backup_leader_ids.values()) & set(selected_leader_ids):
+        raise RuntimeError("COPY_SELECTION_BACKUP_DUPLICATES_ACTIVE_LEADER")
     review_leaders = [item.leader for item in reviewed]
     local_now = now.astimezone(_SHANGHAI)
     if strategy is SelectionStrategy.SHORT_TERM:
@@ -674,6 +741,9 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
         "selection_run_id": selection_run_id,
         "occurred_at": now.isoformat().replace("+00:00", "Z"),
         "candidate_count": len(leaders),
+        "directory_public_total": directory.public_total,
+        "directory_valid_total": directory.valid_total,
+        "directory_invalid_row_count": directory.invalid_row_count,
         "eligible_count": len(profiled),
         "reviewed_count": len(review_leaders),
         "selected_leader_ids": list(selected_leader_ids),

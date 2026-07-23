@@ -118,6 +118,47 @@ class PublicLeaderOrder:
     event_key: str
     raw_payload_hash: str
 
+    def with_identity_discriminator(self, discriminator: str) -> PublicLeaderOrder:
+        """Return a stable distinct identity when the public response proves a batch order.
+
+        Binance's copy-trading history omits the exchange order ID. Callers may use
+        this only after observing multiple otherwise-colliding rows in the same
+        response and deriving a deterministic discriminator from those rows.
+        """
+
+        if not re.fullmatch(r"[A-Z0-9_.:-]{3,96}", discriminator):
+            raise PublicCopyDataError("COPY_ORDER_IDENTITY_DISCRIMINATOR_INVALID")
+        identity_key = _digest(
+            {
+                "discriminator": discriminator,
+                "source_identity_key": self.identity_key,
+            }
+        )
+        event_key = _digest(
+            {
+                "average_price": str(self.average_price),
+                "executed_quantity": str(self.executed_quantity),
+                "identity_key": identity_key,
+                "total_pnl": str(self.total_pnl),
+                "update_time_ms": self.update_time_ms,
+            }
+        )
+        return PublicLeaderOrder(
+            lead_portfolio_id=self.lead_portfolio_id,
+            symbol=self.symbol,
+            position_side=self.position_side,
+            order_side=self.order_side,
+            order_type=self.order_type,
+            executed_quantity=self.executed_quantity,
+            average_price=self.average_price,
+            total_pnl=self.total_pnl,
+            order_time_ms=self.order_time_ms,
+            update_time_ms=self.update_time_ms,
+            identity_key=identity_key,
+            event_key=event_key,
+            raw_payload_hash=self.raw_payload_hash,
+        )
+
     def resolve_position_side(
         self,
         position_side: SourcePositionSide,

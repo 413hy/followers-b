@@ -10,7 +10,6 @@ import pytest
 
 from ai_quant.copy_trading.binance_public import (
     BINANCE_WEB_BASE,
-    COPY_ORDER_POLL_PAGE_SIZE,
     POSITION_HISTORY_PATH,
     BinancePublicCopyClient,
     ClosedLeaderPosition,
@@ -307,7 +306,7 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
 
         def order_history(self, lead_portfolio_id: str, *, page_size: int) -> OrderHistoryPage:
             assert lead_portfolio_id == LEADER_ID
-            assert page_size == COPY_ORDER_POLL_PAGE_SIZE
+            assert page_size == 100
             return OrderHistoryPage(orders=orders, total=len(orders))
 
         def position_history(
@@ -344,8 +343,9 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
         def create_leader_change(self, **values: Any) -> LeaderChangeProposal:
             assert values == {
                 "user_id": 42,
-                "slot": LeaderSlot.CUSTOM_2,
+                "slot": LeaderSlot.CUSTOM_7,
                 "lead_portfolio_id": LEADER_ID,
+                "manual_override": True,
             }
             return LeaderChangeProposal("nonce", "confirm")
 
@@ -360,7 +360,7 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
 
     proposal = admin.create_external_leader_change(
         user_id=42,
-        slot=LeaderSlot.CUSTOM_2,
+        slot=LeaderSlot.CUSTOM_7,
         lead_portfolio_id=LEADER_ID,
     )
 
@@ -368,3 +368,50 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
     assert len(repository.activities) == 1
     assert repository.activities[0].sample_order_count == 3
     assert repository.activities[0].testnet_symbol_compatibility_pct == 100
+
+    unresolved = _both_order(
+        side="BUY",
+        quantity="2",
+        offset_ms=400,
+        total_pnl="5",
+    )
+
+    class UnresolvedPublic(Public):
+        def order_history(
+            self,
+            lead_portfolio_id: str,
+            *,
+            page_size: int,
+        ) -> OrderHistoryPage:
+            assert lead_portfolio_id == LEADER_ID
+            assert page_size == 100
+            return OrderHistoryPage(orders=(unresolved,), total=1)
+
+        def position_history(
+            self,
+            lead_portfolio_id: str,
+            *,
+            page_size: int,
+        ) -> PositionHistoryPage:
+            assert lead_portfolio_id == LEADER_ID
+            assert page_size == 100
+            return PositionHistoryPage(positions=(), total=0)
+
+    unresolved_repository = Repository()
+    unresolved_admin = LiveTelegramLeaderAdmin(
+        state=State(),  # type: ignore[arg-type]
+        repository=unresolved_repository,  # type: ignore[arg-type]
+        public=UnresolvedPublic(),  # type: ignore[arg-type]
+        catalog=Catalog(),  # type: ignore[arg-type]
+        clock=lambda: datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    unresolved_proposal = unresolved_admin.create_external_leader_change(
+        user_id=42,
+        slot=LeaderSlot.CUSTOM_7,
+        lead_portfolio_id=LEADER_ID,
+    )
+
+    assert unresolved_proposal.confirmation_text == "confirm"
+    assert len(unresolved_repository.activities) == 1
+    assert unresolved_repository.activities[0].sample_order_count == 1

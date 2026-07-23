@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from ai_quant.copy_trading.leader_slots import (
     LeaderSlot,
+    is_custom_slot,
     leader_slot_callback,
     leader_slot_from_callback,
     leader_slot_label,
@@ -154,6 +155,7 @@ class TelegramBotClient:
         text: str,
         *,
         reply_markup: Mapping[str, object] | None = None,
+        disable_notification: bool = False,
     ) -> int:
         if chat_id not in self.config.allowed_chat_ids:
             raise TelegramBotError("TELEGRAM_CHAT_NOT_ALLOWED")
@@ -162,6 +164,7 @@ class TelegramBotClient:
             "chat_id": chat_id,
             "text": text,
             "disable_web_page_preview": True,
+            "disable_notification": disable_notification,
         }
         if reply_markup is not None:
             payload["reply_markup"] = dict(reply_markup)
@@ -177,6 +180,41 @@ class TelegramBotClient:
             "answerCallbackQuery",
             {"callback_query_id": callback_query_id, "text": text},
         )
+
+    def configure_menu(self) -> None:
+        """Keep a per-chat command-menu fallback for the client-owned keyboard icon."""
+
+        commands = [
+            {"command": "start", "description": "开始并显示底部导航键盘"},
+            {"command": "menu", "description": "重新显示底部导航键盘"},
+            {"command": "status", "description": "查看系统总览"},
+            {"command": "positions", "description": "查看当前仓位"},
+            {"command": "pnl", "description": "查看盈亏"},
+            {"command": "help", "description": "查看使用帮助"},
+        ]
+        if self._call("setMyCommands", {"commands": commands}) is not True:
+            raise TelegramBotError("TELEGRAM_COMMAND_MENU_CONFIG_FAILED")
+        if (
+            self._call(
+                "setChatMenuButton",
+                {"menu_button": {"type": "commands"}},
+            )
+            is not True
+        ):
+            raise TelegramBotError("TELEGRAM_MENU_BUTTON_CONFIG_FAILED")
+        for chat_id in sorted(self.config.allowed_chat_ids):
+            # Telegram only supports chat-specific menu buttons in private chats.
+            if chat_id <= 0:
+                continue
+            document = {
+                "chat_id": chat_id,
+                "menu_button": {"type": "commands"},
+            }
+            if self._call("setChatMenuButton", document) is not True:
+                raise TelegramBotError("TELEGRAM_CHAT_MENU_BUTTON_CONFIG_FAILED")
+            configured = self._call("getChatMenuButton", {"chat_id": chat_id})
+            if not isinstance(configured, dict) or configured.get("type") != "commands":
+                raise TelegramBotError("TELEGRAM_CHAT_MENU_BUTTON_VERIFY_FAILED")
 
     def edit_message(
         self,
@@ -213,6 +251,9 @@ class TelegramBotClient:
             "sendMessage",
             "editMessageText",
             "answerCallbackQuery",
+            "setMyCommands",
+            "setChatMenuButton",
+            "getChatMenuButton",
         }:
             raise TelegramBotError("TELEGRAM_METHOD_DENIED")
         response = self._transport(
@@ -543,8 +584,8 @@ class TelegramMenuRouter:
             except ValueError:
                 self._client.send_message(
                     chat_id,
-                    "带单员命令格式: /leader_set custom1 <ID或Binance详情链接>, "
-                    "或 /leader_find custom1 名称。",
+                    "带单员命令格式: /leader_set custom1..custom7 "
+                    "<ID或Binance详情链接>, 或 /leader_find custom1..custom7 名称。",
                 )
                 return
             if leader_command is not None:
@@ -743,9 +784,7 @@ class TelegramMenuRouter:
                 self._answer_callback(callback_id, "资金配置功能不可用")
                 return
             try:
-                limit_usdt = _normalize_entry_margin_limit(
-                    value.removeprefix("margin:set:")
-                )
+                limit_usdt = _normalize_entry_margin_limit(value.removeprefix("margin:set:"))
                 margin_proposal = self._margin_admin.create_entry_margin_limit_change(
                     user_id=user_id,
                     limit_usdt=limit_usdt,
@@ -898,6 +937,27 @@ class TelegramMenuRouter:
                     message_id,
                     self._leader_admin.leader_management_text(),
                     leader_management_keyboard(),
+                )
+            return
+        if value.startswith("lead:slot:"):
+            try:
+                slot = leader_slot_from_callback(value.rsplit(":", 1)[-1])
+            except ValueError:
+                self._answer_callback(callback_id, "未知槽位")
+                return
+            self._answer_callback(callback_id)
+            if message_id is not None:
+                number = tuple(LeaderSlot).index(slot) + 1
+                mode = "系统推荐候选或手动输入" if not is_custom_slot(slot) else "仅由你手动设置"
+                self._edit_text(
+                    chat_id,
+                    message_id,
+                    (
+                        f"🎛 {number} 号槽位 · {leader_slot_label(slot)}\n"
+                        f"配置方式: {mode}\n"
+                        "请选择本槽位的操作。清空和换人都需要二次确认。"
+                    ),
+                    leader_slot_actions_keyboard(slot),
                 )
             return
         if value.startswith("lead:manual:"):
@@ -1181,9 +1241,7 @@ class TelegramMenuRouter:
                     chat_id,
                     message_id,
                     f"{result}\n\n{self._dashboard.render('pnl')}",
-                    reply_markup=pnl_overview_keyboard(
-                        self._dashboard.pnl_leader_choices()
-                    ),
+                    reply_markup=pnl_overview_keyboard(self._dashboard.pnl_leader_choices()),
                 )
             return
         if value.startswith("confirm:"):
@@ -1426,9 +1484,7 @@ class TelegramMenuRouter:
                         {
                             "text": "✅ 确认初始化" if reset_summary else "✅ 确认执行",
                             "callback_data": (
-                                f"summary_confirm:{nonce}"
-                                if reset_summary
-                                else f"confirm:{nonce}"
+                                f"summary_confirm:{nonce}" if reset_summary else f"confirm:{nonce}"
                             ),
                         },
                         {
@@ -1442,7 +1498,7 @@ class TelegramMenuRouter:
 
 
 def persistent_reply_keyboard() -> dict[str, object]:
-    """Navigation keyboard that clients may collapse behind the input-field icon."""
+    """Navigation keyboard that clients are requested to keep visible."""
 
     return {
         "keyboard": [
@@ -1451,9 +1507,9 @@ def persistent_reply_keyboard() -> dict[str, object]:
             [{"text": "💹 盈亏"}, {"text": "⚙️ 控制"}],
         ],
         "resize_keyboard": True,
-        "is_persistent": False,
+        "is_persistent": True,
         "one_time_keyboard": False,
-        "input_field_placeholder": "点输入框旁的键盘图标切换导航",
+        "input_field_placeholder": "底部导航常驻; 可用输入框旁图标切换",
     }
 
 
@@ -1634,7 +1690,7 @@ def pnl_overview_keyboard(
                 "callback_data": f"pnl:leader:{choice.lead_portfolio_id}",
             }
         ]
-        for choice in choices[:8]
+        for choice in choices[:12]
     ]
     return {
         "inline_keyboard": [
@@ -1767,29 +1823,49 @@ def leader_pnl_keyboard(lead_portfolio_id: str) -> dict[str, object]:
 
 
 def leader_management_keyboard() -> dict[str, object]:
+    slot_buttons = [
+        {
+            "text": f"{number}·{_compact_slot_label(slot)}",
+            "callback_data": f"lead:slot:{leader_slot_callback(slot)}",
+        }
+        for number, slot in enumerate(LeaderSlot, start=1)
+    ]
     return {
         "inline_keyboard": [
-            [{"text": "🔒 长线", "callback_data": "lead:candidates:long"}],
+            slot_buttons[:5],
+            slot_buttons[5:],
             [
-                {"text": "⚡ 短线 1", "callback_data": "lead:candidates:short1"},
-                {"text": "⚡ 短线 2", "callback_data": "lead:candidates:short2"},
+                {"text": "📐 跟单倍数", "callback_data": "mult:manage"},
+                {"text": "🔐 自动换人锁定", "callback_data": "lock:manage"},
             ],
-            [
-                {"text": "🎯 自定义 1", "callback_data": "lead:manual:custom1"},
-                {"text": "🎯 自定义 2", "callback_data": "lead:manual:custom2"},
-            ],
-            [
-                {"text": "✖ 删长线", "callback_data": "lead:remove:long"},
-                {"text": "✖ 删短1", "callback_data": "lead:remove:short1"},
-                {"text": "✖ 删短2", "callback_data": "lead:remove:short2"},
-            ],
-            [
-                {"text": "✖ 删自定义1", "callback_data": "lead:remove:custom1"},
-                {"text": "✖ 删自定义2", "callback_data": "lead:remove:custom2"},
-            ],
-            [{"text": "📐 配置跟单倍数", "callback_data": "mult:manage"}],
-            [{"text": "🔐 锁定带单员", "callback_data": "lock:manage"}],
             [{"text": "↩️ 返回带单员", "callback_data": "view:leaders"}],
+        ]
+    }
+
+
+def leader_slot_actions_keyboard(slot: LeaderSlot) -> dict[str, object]:
+    slot_value = leader_slot_callback(slot)
+    configure_button = (
+        {
+            "text": "🔎 查看候选 / 输入",
+            "callback_data": f"lead:candidates:{slot_value}",
+        }
+        if not is_custom_slot(slot)
+        else {
+            "text": "✍️ 设置带单员",
+            "callback_data": f"lead:manual:{slot_value}",
+        }
+    )
+    return {
+        "inline_keyboard": [
+            [
+                configure_button,
+                {
+                    "text": "🗑 清空此槽位",
+                    "callback_data": f"lead:remove:{slot_value}",
+                },
+            ],
+            [{"text": "↩️ 返回 10 个槽位", "callback_data": "lead:manage"}],
         ]
     }
 
@@ -1823,20 +1899,21 @@ def leader_candidate_keyboard(
 def multiplier_management_keyboard(
     choices: tuple[LeaderMultiplierChoice, ...],
 ) -> dict[str, object]:
-    rows = [
-        [
-            {
-                "text": f"{choice.button_label[:27]} · {choice.current_multiplier}倍",
-                "callback_data": f"mult:leader:{choice.lead_portfolio_id}",
-            }
-        ]
-        for choice in choices[:10]
+    buttons = [
+        {
+            "text": f"{number}·{choice.current_multiplier}倍",
+            "callback_data": f"mult:leader:{choice.lead_portfolio_id}",
+        }
+        for number, choice in enumerate(choices[:10], start=1)
     ]
+    rows = [buttons[:5]] if buttons else []
+    if buttons[5:]:
+        rows.append(buttons[5:])
     rows.extend(
-        [
+        (
             [{"text": "🔄 刷新倍数", "callback_data": "mult:manage"}],
             [{"text": "↩️ 返回管理", "callback_data": "lead:manage"}],
-        ]
+        )
     )
     return {"inline_keyboard": rows}
 
@@ -2027,9 +2104,7 @@ def _message_leader_command(text: str) -> tuple[str, LeaderSlot, str] | None:
     if not query or len(query) > 256 or "\n" in query or "\r" in query:
         raise ValueError("Telegram leader query is invalid")
     leader_id = _binance_leader_reference_id(query)
-    if command == "/leader_set" or (
-        command == "/leader_input" and leader_id is not None
-    ):
+    if command == "/leader_set" or (command == "/leader_input" and leader_id is not None):
         if leader_id is None:
             raise ValueError("Telegram leader portfolio ID is invalid")
         return "SET", slot, leader_id
@@ -2103,13 +2178,18 @@ def _entry_margin_input_reply(reply_text: str) -> bool:
 
 def _leader_input_reply_slot(reply_text: str) -> LeaderSlot | None:
     first_line = reply_text.splitlines()[0] if reply_text else ""
-    return {
-        f"✍️ 输入{leader_slot_label(LeaderSlot.LONG_TERM)}带单员": LeaderSlot.LONG_TERM,
-        f"✍️ 输入{leader_slot_label(LeaderSlot.SHORT_TERM_1)}带单员": LeaderSlot.SHORT_TERM_1,
-        f"✍️ 输入{leader_slot_label(LeaderSlot.SHORT_TERM_2)}带单员": LeaderSlot.SHORT_TERM_2,
-        f"✍️ 输入{leader_slot_label(LeaderSlot.CUSTOM_1)}带单员": LeaderSlot.CUSTOM_1,
-        f"✍️ 输入{leader_slot_label(LeaderSlot.CUSTOM_2)}带单员": LeaderSlot.CUSTOM_2,
-    }.get(first_line)
+    return {f"✍️ 输入{leader_slot_label(slot)}带单员": slot for slot in LeaderSlot}.get(first_line)
+
+
+def _compact_slot_label(slot: LeaderSlot) -> str:
+    automatic = {
+        LeaderSlot.LONG_TERM: "长",
+        LeaderSlot.SHORT_TERM_1: "短1",
+        LeaderSlot.SHORT_TERM_2: "短2",
+    }.get(slot)
+    if automatic is not None:
+        return automatic
+    return f"自{slot.value.removeprefix('CUSTOM_')}"
 
 
 def _action_label(action: ControlAction) -> str:

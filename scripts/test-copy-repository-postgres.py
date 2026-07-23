@@ -19,7 +19,12 @@ from ai_quant.copy_trading.execution import (
 from ai_quant.copy_trading.health import PostgresHealthStore
 from ai_quant.copy_trading.leader_slots import CandidateActivity, LeaderSlot, SelectionStrategy
 from ai_quant.copy_trading.ledger import VirtualPosition, VirtualPositionKey
-from ai_quant.copy_trading.models import LeaderSnapshot, PositionSide, PublicLeaderOrder
+from ai_quant.copy_trading.models import (
+    LeaderSnapshot,
+    PositionSide,
+    PublicLeaderOrder,
+    SourcePositionSide,
+)
 from ai_quant.copy_trading.postgres import PostgresSubmissionJournal
 from ai_quant.copy_trading.repository import AccountPositionMark, CopyTradingRepository
 from ai_quant.copy_trading.selection import CandidateAssessment
@@ -214,6 +219,59 @@ def main() -> int:
     fresh_signals = repository.ingest_orders(LEADER_ID, (fresh,), baseline=False, observed_at=NOW)
     assert len(fresh_signals) == 1
     assert fresh_signals[0].source_delta_quantity == Decimal("1")
+
+    ambiguous_leader_id = "5000000000000000004"
+    ambiguous_baseline = PublicLeaderOrder.from_api(
+        ambiguous_leader_id,
+        {
+            "symbol": "HYPEUSDT",
+            "positionSide": "BOTH",
+            "side": "SELL",
+            "type": "LIMIT",
+            "executedQty": "8.56",
+            "avgPrice": "58.917",
+            "totalPnl": "4.71656",
+            "orderTime": 500,
+            "orderUpdateTime": 500,
+        },
+    )
+    assert (
+        repository.ingest_orders(
+            ambiguous_leader_id,
+            (ambiguous_baseline,),
+            baseline=True,
+            observed_at=NOW,
+        )
+        == ()
+    )
+    resolved_baseline = ambiguous_baseline.resolve_position_side(
+        position_side=SourcePositionSide.LONG,
+    )
+    assert (
+        repository.ingest_orders(
+            ambiguous_leader_id,
+            (resolved_baseline,),
+            baseline=False,
+            observed_at=NOW + timedelta(seconds=1),
+        )
+        == ()
+    )
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT position_side,is_baseline
+              FROM copytrading.source_order_events
+             WHERE lead_portfolio_id=%s
+             ORDER BY position_side
+            """,
+            (ambiguous_leader_id,),
+        )
+        assert cursor.fetchall() == [("BOTH", True), ("LONG", True)]
+        cursor.execute(
+            "SELECT count(*) FROM copytrading.signals WHERE lead_portfolio_id=%s",
+            (ambiguous_leader_id,),
+        )
+        assert cursor.fetchone() == (0,)
 
     other_leader_id = "5000000000000000003"
     other_baseline = _order(
@@ -909,6 +967,8 @@ def main() -> int:
     assert "手续费/资金费等净调整: +0 U" in pnl_view, pnl_view
     assert "database integration leader\nID: 5000000000000000002" in pnl_view, pnl_view
     assert "本线今日: +1 U\n本线本月: +1 U\n本线累计: +1 U" in pnl_view, pnl_view
+    assert "名称未知" not in pnl_view, pnl_view
+    assert "自定义 7" not in pnl_view, pnl_view
     assert "累计毛盈亏: +1 U" in telegram.render_leader_pnl(LEADER_ID)
     assert tuple(item.lead_portfolio_id for item in telegram.pnl_leader_choices())[:2] == (
         long_candidate.lead_portfolio_id,

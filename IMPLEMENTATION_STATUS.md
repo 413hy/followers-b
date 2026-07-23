@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: `2026-07-21`
+Updated: `2026-07-23`
 
 Overall state: `COPY_TESTNET_IMPLEMENTED / AUTOMATION_ENABLED / PRODUCTION_LOCKED`
 
@@ -14,8 +14,8 @@ executes them through a bounded Testnet adapter.
 
 Implemented runtime components include:
 
-- public Binance lead-trader discovery and 30-second incremental history polling;
-- one long-term, two short-term and two owner-managed custom slots;
+- public Binance lead-trader discovery and 10-second incremental history polling;
+- ten slots: one long-term, two short-term and seven owner-managed custom slots;
 - deterministic candidate filtering plus structured Codex selection review;
 - isolated per-leader virtual position, order, multiplier and PnL attribution;
 - protected-limit entries, market reductions and idempotent exchange reconciliation;
@@ -38,8 +38,8 @@ Codex authentication and runtime evidence also remain outside Git.
 
 ## Verification
 
-The current source snapshot passes 609 pytest tests on Debian 12/aarch64, together with focused
-Ruff validation. Before deployment or upgrade, run:
+The current source snapshot is verified on Debian 12/aarch64 with the full pytest suite, Ruff,
+mypy, migration tests and the repository secret scan. Before deployment or upgrade, run:
 
 ```bash
 uv sync --frozen --all-groups
@@ -55,6 +55,8 @@ delivery and explicit operator confirmation before new entries are allowed.
 ## Documentation
 
 - Product overview: `README.md`
+- Detailed project overview: `docs/PROJECT_OVERVIEW.md`
+- Codex VPS handoff: `docs/deployment/codex-vps-handoff.md`
 - Complete Testnet deployment: `docs/deployment/copy-trading-vps.md`
 - Copy-trading behavior: `docs/architecture/copy-trading-testnet.md`
 - Production cutover boundary: `docs/deployment/copy-production-cutover.md`

@@ -41,8 +41,7 @@ _LABELS = {
         "原委托不存在, 本次不会造成重复开仓"
     ),
     "COPY_EXCHANGE_CODE_4016": (
-        "提交限价高于 Binance 当时允许的动态价格上限; "
-        "订单在进入撮合前已被拒绝, 没有成交或仓位残留"
+        "提交限价高于 Binance 当时允许的动态价格上限; 订单在进入撮合前已被拒绝, 没有成交或仓位残留"
     ),
     "COPY_ORDER_NOTIONAL_BELOW_EXCHANGE_MINIMUM": "订单金额低于交易所最小下单要求",
     "COPY_ORDER_PARTIAL_PENDING": "订单已部分成交, 剩余数量仍在等待成交",
@@ -117,9 +116,7 @@ _LABELS = {
     "COPY_ACCOUNT_WARNING_RISK_LINE": (
         "账户低于风险预警参考线; 当前仅记录指标, 不会自动暂停新开仓"
     ),
-    "COPY_ACCOUNT_EMERGENCY_RISK_LINE": (
-        "账户低于紧急风险参考线; 当前仅记录指标, 不会自动清仓"
-    ),
+    "COPY_ACCOUNT_EMERGENCY_RISK_LINE": ("账户低于紧急风险参考线; 当前仅记录指标, 不会自动清仓"),
     "COPY_ACCOUNT_RISK_AUTOMATION_REMOVED_AUTO_RESUME": (
         "已取消账户风险线的自动暂停功能, 系统恢复接收新开仓"
     ),
@@ -191,6 +188,7 @@ _LABELS = {
     "COPY_SELECTION_WIN_RATE_LOW": "公开胜率低于选人门槛",
     "COPY_SELECTION_DRAWDOWN_HIGH": "最大回撤超过选人门槛",
     "COPY_SELECTION_AUM_LOW": "带单资金规模低于选人门槛",
+    "COPY_SELECTION_FOLLOWER_COUNT_LOW": "当前跟单人数低于自动选人门槛",
     "COPY_SELECTION_RETURN_NONPOSITIVE": "公开收益不是正数",
     "COPY_SELECTION_TRACK_RECORD_SHORT": "公开交易记录时间过短",
     "COPY_SELECTION_CLOSE_SAMPLE_SMALL": "可验证的平仓样本不足",
@@ -214,6 +212,12 @@ _LABELS = {
     "COPY_SELECTION_LOCKED_SLOT_BACKUP_UNAVAILABLE": (
         "当前带单员保持锁定, 本轮没有通过门槛的备用候选"
     ),
+    "COPY_TELEGRAM_LEADER_ALREADY_IN_SLOT": "该带单员已经配置在这条线上",
+    "COPY_TELEGRAM_LEADER_ASSIGNED_ELSEWHERE": "该带单员已经配置在另一条线上, 各条线不能重复",
+    "COPY_TELEGRAM_LEADER_EVIDENCE_UNAVAILABLE": "没有读到可用于建立跟单基线的近期公开操作",
+    "COPY_TELEGRAM_LEADER_SYMBOL_COMPATIBILITY_LOW": "该带单员近期交易品种与当前执行环境兼容率不足",
+    "COPY_TELEGRAM_LEADER_DRAINING_WITH_POSITION": "该带单员仍有旧仓位正在排空, 暂时不能重新配置",
+    "COPY_TELEGRAM_SHORT_LEADER_ACTIVITY_LOW": "该带单员近期活跃度未达到自动短线门槛",
     "COPY_DRAINING_COMPLETED_RETIRED": "旧带单员仓位与待处理订单均已归零, 已停止额外轮询",
     "COPY_SELECTION_ASSIGNED_TO_OTHER_STRATEGY": "该带单员已分配到另一个槽位, 本轮不会重复占用",
     "COPY_SLOT_REPLACEMENT_BLOCKED_BY_LEADER_LOCK": (
@@ -246,6 +250,9 @@ _LABELS = {
         "带单员公开记录不足以判断这笔订单属于多仓还是空仓, 系统未据此下单"
     ),
     "COPY_SIGNAL_POSITION_SIDE_AMBIGUOUS": "带单员信号的多空方向存在歧义, 系统未据此下单",
+    "COPY_BASELINE_POSITION_SIDE_EVIDENCE_DEFERRED": (
+        "首次加入时仅建立历史水位, 历史记录方向不完整不影响手动添加"
+    ),
     "COPY_LEADER_LOOKUP_NOT_FOUND": "没有在 Binance 公开目录中找到该带单员",
     "COPY_MANUAL_LEADER_ONE_WAY_EVIDENCE_UNRESOLVED": "公开操作不足以可靠还原该带单员的多空方向",
     "COPY_MANUAL_LEADER_POSITION_SIDE_AMBIGUOUS": "该带单员公开操作的多空方向存在歧义",

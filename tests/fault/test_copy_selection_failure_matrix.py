@@ -36,7 +36,7 @@ def _leader(index: int) -> LeaderSnapshot:
         aum_usdt=Decimal("100000"),
         maximum_drawdown_pct=Decimal("12"),
         win_rate_pct=Decimal("68"),
-        current_copy_count=10,
+        current_copy_count=300,
         maximum_copy_count=100,
         start_time_ms=1_700_000_000_000,
         portfolio_type="PUBLIC",
@@ -73,55 +73,49 @@ def _quality_orders(leader_id: str) -> tuple[PublicLeaderOrder, ...]:
     return tuple(orders)
 
 
-def test_candidate_directory_combines_return_win_rate_and_drawdown_rankings(
+def test_candidate_directory_uses_full_public_directory_and_follower_first_order(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    leaders_by_ranking = {
-        "ROI": (_leader(1), _leader(2)),
-        "WIN_RATE": (_leader(2), _leader(3)),
-        "MDD": (_leader(3), _leader(4)),
-    }
+    leaders = (
+        replace(_leader(1), current_copy_count=250),
+        replace(_leader(2), current_copy_count=700),
+        replace(_leader(3), current_copy_count=400),
+    )
     requested: list[str] = []
 
     class Public:
-        def list_leaders(self, **kwargs: Any) -> LeaderPage:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
             data_type = str(kwargs["data_type"])
             requested.append(data_type)
-            assert kwargs["skip_invalid_rows"] is True
-            leaders = leaders_by_ranking[data_type]
             return LeaderPage(
                 leaders=leaders,
-                total=len(leaders) + (1 if data_type == "WIN_RATE" else 0),
-                invalid_row_count=1 if data_type == "WIN_RATE" else 0,
-                invalid_reason_codes=(
-                    ("COPY_FIELD_NICKNAME_INVALID",) if data_type == "WIN_RATE" else ()
-                ),
+                total=8392,
+                invalid_row_count=1,
+                invalid_reason_codes=("COPY_FIELD_NICKNAME_INVALID",),
             )
 
-    leaders = service._candidate_directory(
+    directory = service._candidate_directory(
         Public(),  # type: ignore[arg-type]
         strategy=service.SelectionStrategy.LONG_TERM,
         candidate_pool_size=20,
         observed_at_ms=int(datetime.now(UTC).timestamp() * 1000),
     )
 
-    assert requested == ["ROI", "WIN_RATE", "MDD"]
-    assert {leader.lead_portfolio_id for leader in leaders} == {
-        leader.lead_portfolio_id for ranking in leaders_by_ranking.values() for leader in ranking
-    }
+    assert requested == ["ROI"]
+    assert directory.public_total == 8392
+    assert [leader.current_copy_count for leader in directory.leaders] == [700, 400, 250]
     warning = json.loads(capsys.readouterr().out)
     assert warning == {
         "event": "copy_selection_invalid_candidates_skipped",
-        "ranking": "WIN_RATE",
+        "source": "FULL_PUBLIC_DIRECTORY",
         "count": 1,
         "reason_codes": ["COPY_FIELD_NICKNAME_INVALID"],
     }
 
 
-def test_candidate_directory_fails_closed_when_every_ranking_row_is_invalid() -> None:
+def test_candidate_directory_fails_closed_when_every_directory_row_is_invalid() -> None:
     class Public:
-        def list_leaders(self, **kwargs: Any) -> LeaderPage:
-            assert kwargs["skip_invalid_rows"] is True
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
             return LeaderPage(
                 leaders=(),
                 total=1,
@@ -189,7 +183,7 @@ def test_short_selection_splits_highest_win_rate_and_intraday_composite(
     )
 
     class Public:
-        def list_leaders(self, **kwargs: Any) -> LeaderPage:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
             return LeaderPage(leaders=leaders, total=len(leaders))
 
         def order_history(self, leader_id: str, **kwargs: Any) -> OrderHistoryPage:
@@ -303,7 +297,9 @@ def test_short_selection_splits_highest_win_rate_and_intraday_composite(
         leaders[0].lead_portfolio_id,
         leaders[1].lead_portfolio_id,
     )
-    assert evidence["codex_decision"]["short_term_1"]["objective"] == ("HIGHEST_CREDIBLE_WIN_RATE")
+    assert evidence["codex_decision"]["short_term_1"]["objective"] == (
+        "FOLLOWER_FIRST_CREDIBLE_WIN_RATE"
+    )
     assert [call[0] for call in selector_calls] == [
         "SHORT_TERM_WIN_RATE",
         "SHORT_TERM_INTRADAY",
@@ -317,10 +313,11 @@ def test_locked_short_slot_keeps_incumbent_and_selects_advisory_backup(
     leaders = tuple(_leader(index) for index in range(1, 5))
     locked_incumbent = leaders[0].lead_portfolio_id
     current_short_2 = leaders[1].lead_portfolio_id
-    expected_backup = leaders[2].lead_portfolio_id
+    expected_short_2 = leaders[2].lead_portfolio_id
+    expected_backup = leaders[3].lead_portfolio_id
 
     class Public:
-        def list_leaders(self, **kwargs: Any) -> LeaderPage:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
             return LeaderPage(leaders=leaders, total=len(leaders))
 
         def order_history(self, leader_id: str, **kwargs: Any) -> OrderHistoryPage:
@@ -387,10 +384,10 @@ def test_locked_short_slot_keeps_incumbent_and_selects_advisory_backup(
             assert leader_count == 1
             candidate_ids = tuple(str(item["lead_portfolio_id"]) for item in candidates)
             assert locked_incumbent not in candidate_ids
+            if strategy == "SHORT_TERM_WIN_RATE":
+                assert current_short_2 not in candidate_ids
             selector_calls.append((strategy, candidate_ids))
-            selected = (
-                expected_backup if strategy == "SHORT_TERM_WIN_RATE" else current_short_2
-            )
+            selected = candidate_ids[0] if strategy == "SHORT_TERM_WIN_RATE" else expected_short_2
             return CodexSelectionResult(
                 selected_leader_ids=(selected,),
                 document={"selected_leader_ids": [selected]},
@@ -425,12 +422,141 @@ def test_locked_short_slot_keeps_incumbent_and_selects_advisory_backup(
         )
     )
 
-    assert Repository.selected == (locked_incumbent, current_short_2)
+    assert Repository.selected == (locked_incumbent, expected_short_2)
     assert Repository.backups == {LeaderSlot.SHORT_TERM_1: expected_backup}
     assert evidence["backup_leader_ids"] == {"SHORT_TERM_1": expected_backup}
     assert evidence["codex_decision"]["short_term_1"]["codex_review"]["state"] == (
         "LOCKED_RETAINED_WITH_BACKUP"
     )
+    assert [call[0] for call in selector_calls] == [
+        "SHORT_TERM_WIN_RATE",
+        "SHORT_TERM_INTRADAY",
+        "SHORT_TERM_WIN_RATE",
+    ]
+
+
+def test_all_locked_short_slots_keep_both_incumbents_and_only_refresh_backups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leaders = tuple(_leader(index) for index in range(1, 5))
+    short_1 = leaders[0].lead_portfolio_id
+    short_2 = leaders[1].lead_portfolio_id
+
+    class Public:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
+            return LeaderPage(leaders=leaders, total=len(leaders))
+
+        def order_history(self, leader_id: str, **kwargs: Any) -> OrderHistoryPage:
+            orders = _quality_orders(leader_id)
+            return OrderHistoryPage(orders=orders, total=len(orders))
+
+    class Catalog:
+        def trading_symbols(self) -> frozenset[str]:
+            return frozenset({"ETHUSDT"})
+
+    class Repository:
+        selected: tuple[str, ...] = ()
+        backups: dict[LeaderSlot, str] | None = None
+
+        def __init__(self, dsn: str) -> None:
+            assert dsn.startswith("postgresql://")
+
+        def current_slot_assignments(self) -> dict[LeaderSlot, str]:
+            return {
+                LeaderSlot.SHORT_TERM_1: short_1,
+                LeaderSlot.SHORT_TERM_2: short_2,
+            }
+
+        def current_locked_leader_ids(self) -> frozenset[str]:
+            return frozenset({short_1, short_2})
+
+        def recently_manually_cleared_leader_ids(self, **kwargs: Any) -> frozenset[str]:
+            return frozenset()
+
+        def leader_selection_trend(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def record_leader_snapshot(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def record_candidate_activity(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def apply_slot_selection(
+            self,
+            candidates: tuple[LeaderSnapshot, ...],
+            assessments: dict[str, Any],
+            selected_leader_ids: tuple[str, ...],
+            **kwargs: Any,
+        ) -> str:
+            del candidates, assessments
+            Repository.selected = selected_leader_ids
+            Repository.backups = dict(kwargs["backup_leader_ids"])
+            return "9" * 64
+
+    selector_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class Selector:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def select(
+            self,
+            candidates: tuple[dict[str, object], ...],
+            *,
+            leader_count: int,
+            strategy: str,
+        ) -> CodexSelectionResult:
+            assert leader_count == 1
+            candidate_ids = tuple(str(item["lead_portfolio_id"]) for item in candidates)
+            assert short_1 not in candidate_ids
+            assert short_2 not in candidate_ids
+            selector_calls.append((strategy, candidate_ids))
+            selected = candidate_ids[0]
+            return CodexSelectionResult(
+                selected_leader_ids=(selected,),
+                document={"selected_leader_ids": [selected]},
+                candidate_digest="7" * 64,
+                report_digest="8" * 64,
+            )
+
+    monkeypatch.setattr(service, "BinancePublicCopyClient", Public)
+    monkeypatch.setattr(service, "BinanceTestnetCatalogClient", Catalog)
+    monkeypatch.setattr(service, "CopyTradingRepository", Repository)
+    monkeypatch.setattr(service, "CodexDailySelector", Selector)
+    database_file = tmp_path / "database-url"
+    database_file.write_text("postgresql://local/test", encoding="utf-8")
+    os.chmod(database_file, 0o400)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("test: true\n", encoding="utf-8")
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text("{}", encoding="utf-8")
+
+    evidence = service.run_selection(
+        argparse.Namespace(
+            database_url_file=database_file,
+            repository_root=Path("/root/quantify/ai-quant-system"),
+            config_file=config_file,
+            schema_file=schema_file,
+            work_root=tmp_path / "work",
+            evidence_file=tmp_path / "evidence.json",
+            leader_count=2,
+            candidate_pool_size=20,
+            review_pool_size=3,
+            strategy="SHORT_TERM",
+        )
+    )
+
+    assert Repository.selected == (short_1, short_2)
+    assert Repository.backups is not None
+    assert set(Repository.backups) == {
+        LeaderSlot.SHORT_TERM_1,
+        LeaderSlot.SHORT_TERM_2,
+    }
+    assert not set(Repository.backups.values()) & {short_1, short_2}
+    assert evidence["selected_leader_ids"] == [short_1, short_2]
+    assert set(evidence["backup_leader_ids"]) == {"SHORT_TERM_1", "SHORT_TERM_2"}
     assert [call[0] for call in selector_calls] == [
         "SHORT_TERM_WIN_RATE",
         "SHORT_TERM_INTRADAY",
@@ -531,7 +657,7 @@ def test_daily_selection_skips_one_inaccessible_candidate(
     inaccessible = leaders[0].lead_portfolio_id
 
     class Public:
-        def list_leaders(self, **kwargs: Any) -> LeaderPage:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
             return LeaderPage(leaders=leaders, total=len(leaders))
 
         def order_history(self, leader_id: str, **kwargs: Any) -> OrderHistoryPage:
@@ -791,5 +917,5 @@ def test_short_win_rate_codex_strategy_uses_win_rate_objective_without_activity_
     )
 
     assert result.selected_leader_ids == (selected,)
-    assert "highest credible win-rate" in prompts[0]
-    assert "current_copy_count as bounded supporting social proof" in prompts[0]
+    assert "Rank primarily by current copier count" in prompts[0]
+    assert "current_copy_count as the primary ranking signal" in prompts[0]

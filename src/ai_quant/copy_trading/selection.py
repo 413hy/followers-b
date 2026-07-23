@@ -14,13 +14,18 @@ class SelectionPolicy:
     maximum_drawdown_pct: Decimal = Decimal("35")
     minimum_aum_usdt: Decimal = Decimal("10000")
     minimum_track_record_days: int = 7
+    minimum_current_copy_count: int = 0
 
     def __post_init__(self) -> None:
         if not Decimal("0") <= self.minimum_win_rate_pct <= Decimal("100"):
             raise ValueError("copy minimum win rate is invalid")
         if not Decimal("0") <= self.maximum_drawdown_pct <= Decimal("100"):
             raise ValueError("copy maximum drawdown is invalid")
-        if self.minimum_aum_usdt <= 0 or not 1 <= self.minimum_track_record_days <= 3650:
+        if (
+            self.minimum_aum_usdt <= 0
+            or not 1 <= self.minimum_track_record_days <= 3650
+            or self.minimum_current_copy_count < 0
+        ):
             raise ValueError("copy selection policy is invalid")
 
 
@@ -51,6 +56,8 @@ def assess_candidate(
         reasons.append("COPY_SELECTION_RETURN_NONPOSITIVE")
     if track_record_days < effective.minimum_track_record_days:
         reasons.append("COPY_SELECTION_TRACK_RECORD_SHORT")
+    if leader.current_copy_count < effective.minimum_current_copy_count:
+        reasons.append("COPY_SELECTION_FOLLOWER_COUNT_LOW")
 
     roi_component = min(max(leader.roi_pct, Decimal("0")), Decimal("500")) / Decimal("5")
     drawdown_component = Decimal("100") - leader.maximum_drawdown_pct
@@ -64,12 +71,12 @@ def assess_candidate(
     )
     social_proof_component = copy_social_proof_score(leader.current_copy_count)
     score = (
-        leader.win_rate_pct * Decimal("0.32")
-        + drawdown_component * Decimal("0.28")
-        + roi_component * Decimal("0.18")
-        + aum_component * Decimal("0.07")
-        + track_component * Decimal("0.05")
-        + social_proof_component * Decimal("0.10")
+        social_proof_component * Decimal("0.40")
+        + leader.win_rate_pct * Decimal("0.18")
+        + drawdown_component * Decimal("0.17")
+        + roi_component * Decimal("0.10")
+        + aum_component * Decimal("0.06")
+        + track_component * Decimal("0.09")
     ).quantize(Decimal("0.000001"))
     return CandidateAssessment(
         lead_portfolio_id=leader.lead_portfolio_id,

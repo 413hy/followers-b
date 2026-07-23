@@ -3,6 +3,9 @@
 本手册面向一台全新 VPS，目标是部署仓库中已实现的 Binance USD-M Futures
 Testnet 跟单系统。所有命令默认以 `root` 执行。
 
+如果部署由另一台 VPS 上的 Codex 完成，请先阅读
+[Codex VPS 部署交接清单](codex-vps-handoff.md)和仓库根目录的 `AGENTS.md`。
+
 ## 1. 重要边界
 
 - 已验证宿主机为 Debian 12 Bookworm/aarch64；其他发行版和架构需自行重新验证。
@@ -20,7 +23,7 @@ Testnet 跟单系统。所有命令默认以 `root` 执行。
 3. Docker Engine 和 `docker compose` 插件。
 4. Git、curl、OpenSSL、`flock` (`util-linux`) 和 systemd。
 5. `uv`，用于按 `uv.lock` 安装 Python 3.12 和依赖。
-6. Codex CLI 及可用的 Codex 账户，用于自动选人、小时审查和修复。
+6. 当前 Node.js/npm、Codex CLI 及可用的 Codex 账户，用于自动选人、小时审查和修复。
 
 建议先安装基础包：
 
@@ -44,6 +47,8 @@ systemctl enable --now docker.service
 install -d -m 0755 /root/quantify
 git clone https://github.com/413hy/follwers-b.git /root/quantify/ai-quant-system
 cd /root/quantify/ai-quant-system
+git rev-parse HEAD
+sed -n '1,240p' AGENTS.md
 uv sync --frozen --all-groups
 .venv/bin/python --version
 ```
@@ -56,7 +61,16 @@ Python 版本必须在 `3.12.x`，`uv sync --frozen` 不应改写 `uv.lock`。
 Codex 支持使用 ChatGPT OAuth、设备登录或 API Key 等方式认证；本项目不读取仓库内的
 OpenAI Key，systemd 使用 root 的 `/root/.codex` 登录状态。
 
-项目对可执行文件的固定路径是 `/root/.local/bin/codex`：
+如果尚未安装，可在已准备好当前 Node.js/npm 后安装官方包。不要把 CLI 版本写死为本文
+发布时的版本；部署当天先核对官方文档：
+
+```bash
+npm install -g @openai/codex
+codex --version
+codex login
+```
+
+项目对 systemd 使用的可执行文件固定路径是 `/root/.local/bin/codex`：
 
 ```bash
 install -d -m 0755 /root/.local/bin
@@ -64,11 +78,11 @@ CODEX_BIN="$(command -v codex)"
 if [ "$CODEX_BIN" != /root/.local/bin/codex ]; then
   ln -sfn "$CODEX_BIN" /root/.local/bin/codex
 fi
-/root/.local/bin/codex login
 /root/.local/bin/codex --version
 ```
 
-请在 root 会话中完成登录。不要把 `/root/.codex`、`auth.json` 或 API Key 复制到项目目录。
+请在 root 会话中完成登录；如果前面不是以 root 登录，请再次运行
+`/root/.local/bin/codex login`。不要把 `/root/.codex`、`auth.json` 或 API Key 复制到项目目录。
 代码当前显式固定 `src/ai_quant/copy_trading/codex_model.py` 中的模型和 `high` 推理强度；
 部署账户如果无权使用该模型，选人/审查任务会安全失败，不应通过删除结构化输出或安全门禁绕过。
 
@@ -143,11 +157,13 @@ COPY_BUSINESS_DB_PASSWORD_FILE=/root/aiq-user-inputs/copy-trading/secrets/busine
 ```bash
 cd /root/quantify/ai-quant-system
 install -m 0644 deploy/systemd/aiq-testnet-secrets.service /etc/systemd/system/
+install -m 0644 deploy/systemd/aiq-testnet-user-stream.service /etc/systemd/system/
 install -m 0644 deploy/systemd/aiq-copy-*.service /etc/systemd/system/
 install -m 0644 deploy/systemd/aiq-copy-*.timer /etc/systemd/system/
 systemctl daemon-reload
 systemd-analyze verify \
   /etc/systemd/system/aiq-testnet-secrets.service \
+  /etc/systemd/system/aiq-testnet-user-stream.service \
   /etc/systemd/system/aiq-copy-*.service \
   /etc/systemd/system/aiq-copy-*.timer
 ```
@@ -161,7 +177,8 @@ systemctl enable \
   aiq-copy-infra.service \
   aiq-copy-migrations.service \
   aiq-copy-poller.service \
-  aiq-copy-telegram.service
+  aiq-copy-telegram.service \
+  aiq-testnet-user-stream.service
 ```
 
 按依赖顺序首次启动：
@@ -173,6 +190,7 @@ systemctl start aiq-copy-infra.service
 systemctl start aiq-copy-migrations.service
 systemctl start aiq-copy-poller.service
 systemctl start aiq-copy-telegram.service
+systemctl start aiq-testnet-user-stream.service
 ```
 
 再启用定时巡检、选人、审查、备份和事故补发：
@@ -196,9 +214,10 @@ systemctl start aiq-copy-long-leader-selector.service
 systemctl start aiq-copy-leader-selector.service
 ```
 
-这两个任务会读取公开候选数据并调用 Codex，可能持续数分钟。完成后等待至少一个 10 秒轮询周期，
-在 Telegram 中检查带单员、仓位、待入场和系统状态。最后使用授权用户的“恢复新开仓”二次确认操作，
-不要通过直改数据库跳过该门禁。
+这两个任务会读取公开候选数据并调用 Codex，可能持续数分钟。自动选人只管理 1 个长线和
+2 个短线槽位；自定义 1–7 只能由 Telegram 授权用户输入公开带单员 ID 或详情页链接配置，
+也可以保持为空。完成后等待至少一个 10 秒轮询周期，在 Telegram 中检查带单员、仓位、
+待入场和系统状态。最后使用授权用户的“恢复新开仓”二次确认操作，不要通过直改数据库跳过该门禁。
 
 ## 9. 上线验收
 
@@ -208,17 +227,25 @@ systemctl is-active \
   aiq-copy-migrations.service \
   aiq-copy-poller.service \
   aiq-copy-telegram.service \
+  aiq-testnet-user-stream.service \
   aiq-copy-watchdog.timer
 systemctl is-enabled \
   aiq-copy-migrations.service \
   aiq-copy-poller.service \
   aiq-copy-telegram.service \
-  aiq-copy-watchdog.timer
+  aiq-testnet-user-stream.service \
+  aiq-copy-watchdog.timer \
+  aiq-copy-leader-selector.timer \
+  aiq-copy-long-leader-selector.timer \
+  aiq-copy-codex-audit.timer \
+  aiq-copy-database-backup.timer \
+  aiq-copy-incident-replay.timer
 docker compose -f deploy/copy-trading-infra.compose.yaml ps
 AIQ_BUSINESS_DATABASE_URL_FILE=/run/ai-quant-secrets/copy-business-database-url \
   .venv/bin/alembic -c migrations/business/alembic.ini current
 journalctl -u aiq-copy-poller.service -n 50 --no-pager
 journalctl -u aiq-copy-telegram.service -n 50 --no-pager
+journalctl -u aiq-testnet-user-stream.service -n 50 --no-pager
 systemctl start aiq-copy-watchdog.service
 journalctl -u aiq-copy-watchdog.service -n 30 --no-pager
 ```
@@ -227,6 +254,7 @@ journalctl -u aiq-copy-watchdog.service -n 30 --no-pager
 
 - Alembic 只有一个 head，且数据库已在该 head。
 - 每个 10 秒周期的带单员轮询成功，没有持续失败。
+- Testnet user stream 保持连接或能够明确重连，没有持续认证失败。
 - Telegram 能显示 Testnet 环境，并且只接受授权 User ID 的写操作。
 - Watchdog 为 `HEALTHY` 且无关键 finding。
 - `systemctl --failed` 无与 `aiq-copy-*` 相关的失败单元。
@@ -270,11 +298,14 @@ uv run python scripts/upgrade-pending-protected-orders.py \
   --api-key-file /run/ai-quant-secrets/binance-testnet-api-key \
   --api-secret-file /run/ai-quant-secrets/binance-testnet-api-secret \
   --repository-root /root/quantify/ai-quant-system
-install -m 0644 deploy/systemd/aiq-copy-poller.service \
-  /etc/systemd/system/aiq-copy-poller.service
+install -m 0644 deploy/systemd/aiq-testnet-user-stream.service \
+  /etc/systemd/system/aiq-testnet-user-stream.service
+install -m 0644 deploy/systemd/aiq-copy-*.service /etc/systemd/system/
+install -m 0644 deploy/systemd/aiq-copy-*.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl start aiq-copy-poller.service
 systemctl restart aiq-copy-telegram.service
+systemctl restart aiq-testnet-user-stream.service
 systemctl start aiq-copy-watchdog.service
 ```
 

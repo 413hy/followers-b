@@ -6,7 +6,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from ai_quant.copy_trading.binance_public import (
-    COPY_ORDER_POLL_PAGE_SIZE,
     BinancePublicCopyClient,
     BinancePublicCopyError,
 )
@@ -159,11 +158,16 @@ class LiveTelegramLeaderAdmin:
         lead_portfolio_id: str,
     ) -> LeaderChangeProposal:
         leader = self._public.find_leader(lead_portfolio_id)
-        self._refresh_evidence(leader)
+        # An owner-supplied ID is an explicit assignment choice, not an automatic
+        # candidate recommendation. Historical one-way rows may be directionally
+        # incomplete, but they are only used to establish a baseline and must not
+        # prevent the leader from being assigned.
+        self._refresh_evidence(leader, allow_ambiguous_direction=True)
         return self._state.create_leader_change(
             user_id=user_id,
             slot=slot,
             lead_portfolio_id=leader.lead_portfolio_id,
+            manual_override=True,
         )
 
     def search_external_leaders(
@@ -175,7 +179,10 @@ class LiveTelegramLeaderAdmin:
         choices: list[LeaderCandidateChoice] = []
         for leader in self._public.search_leaders(nickname_query):
             try:
-                activity = self._refresh_evidence(leader)
+                activity = self._refresh_evidence(
+                    leader,
+                    allow_ambiguous_direction=is_custom_slot(slot),
+                )
             except (BinancePublicCopyError, ManualLeaderEvidenceError):
                 continue
             if not is_custom_slot(slot) and activity.testnet_symbol_compatibility_pct < 80:
@@ -191,7 +198,12 @@ class LiveTelegramLeaderAdmin:
             choices.append(_choice(leader, activity, environment_label=self._environment_label))
         return tuple(choices)
 
-    def _refresh_evidence(self, leader: LeaderSnapshot) -> CandidateActivity:
+    def _refresh_evidence(
+        self,
+        leader: LeaderSnapshot,
+        *,
+        allow_ambiguous_direction: bool = False,
+    ) -> CandidateActivity:
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("copy manual leader clock must be timezone-aware")
@@ -202,7 +214,7 @@ class LiveTelegramLeaderAdmin:
         # genuinely ambiguous new operations.
         history = self._public.order_history(
             leader.lead_portfolio_id,
-            page_size=COPY_ORDER_POLL_PAGE_SIZE,
+            page_size=100,
         )
         orders = history.orders
         if any(order.position_side.value == "BOTH" for order in orders):
@@ -216,14 +228,15 @@ class LiveTelegramLeaderAdmin:
                     closed_positions=positions.positions,
                 )
             except (BinancePublicCopyError, OneWayResolutionError) as error:
-                raise ManualLeaderEvidenceError(
-                    "COPY_MANUAL_LEADER_ONE_WAY_EVIDENCE_UNRESOLVED"
-                ) from error
+                if not allow_ambiguous_direction:
+                    raise ManualLeaderEvidenceError(
+                        "COPY_MANUAL_LEADER_ONE_WAY_EVIDENCE_UNRESOLVED"
+                    ) from error
         profile = CandidateOrderProfile.from_orders(
             orders,
             observed_at_ms=int(now.timestamp() * 1000),
         )
-        if profile.ambiguous_position_side_count:
+        if profile.ambiguous_position_side_count and not allow_ambiguous_direction:
             raise ManualLeaderEvidenceError("COPY_MANUAL_LEADER_POSITION_SIDE_AMBIGUOUS")
         if self._execution_symbols is None:
             self._execution_symbols = self._catalog.trading_symbols()

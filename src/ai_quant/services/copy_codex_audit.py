@@ -84,6 +84,43 @@ SELECT signal.signal_id,signal.lead_portfolio_id,signal.symbol,
  ORDER BY decision.occurred_at DESC,signal.signal_id
  LIMIT 8
 """
+_RECENT_LEADER_POLL_FAILURES_SQL = """
+WITH lifecycle AS (
+  SELECT DISTINCT ON (lead_portfolio_id) lead_portfolio_id,state
+    FROM copytrading.leader_lifecycle_events
+   ORDER BY lead_portfolio_id,occurred_at DESC,event_id DESC
+), active AS (
+  SELECT lead_portfolio_id
+    FROM lifecycle
+   WHERE state IN ('OBSERVE_ONLY','ACTIVE','DRAINING')
+)
+SELECT active.lead_portfolio_id,poll.state,poll.reason_codes,poll.occurred_at,
+       snapshot.nickname,
+       (
+         SELECT count(*)
+           FROM copytrading.poll_events AS recent
+          WHERE recent.lead_portfolio_id=active.lead_portfolio_id
+            AND recent.state<>'SUCCEEDED'
+            AND recent.occurred_at>=poll.occurred_at-interval '10 minutes'
+            AND recent.occurred_at<=poll.occurred_at
+       ) AS failure_count_last_10_minutes
+  FROM active
+  JOIN LATERAL (
+    SELECT state,reason_codes,occurred_at
+      FROM copytrading.poll_events
+     WHERE lead_portfolio_id=active.lead_portfolio_id
+     ORDER BY occurred_at DESC,poll_event_id DESC LIMIT 1
+  ) AS poll ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT nickname
+      FROM copytrading.leader_snapshots
+     WHERE lead_portfolio_id=active.lead_portfolio_id
+     ORDER BY observed_at DESC,snapshot_id DESC LIMIT 1
+  ) AS snapshot ON TRUE
+ WHERE poll.state<>'SUCCEEDED' AND poll.occurred_at>=%s
+ ORDER BY poll.occurred_at DESC,active.lead_portfolio_id
+ LIMIT 8
+"""
 
 
 def _arguments() -> argparse.Namespace:
@@ -352,6 +389,43 @@ def _recent_signal_errors(
             }
         )
     return errors
+
+
+def _recent_leader_poll_failures(
+    database_url: str,
+    *,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Expose exact current per-leader poll failures to the automated auditor."""
+
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _RECENT_LEADER_POLL_FAILURES_SQL,
+                (now - timedelta(hours=2),),
+            )
+            rows = list(cursor.fetchall())
+    failures: list[dict[str, Any]] = []
+    for row in rows:
+        raw_reasons = row["reason_codes"]
+        reason_codes = (
+            [str(value)[:120] for value in raw_reasons[:6]]
+            if isinstance(raw_reasons, list)
+            else []
+        )
+        failures.append(
+            {
+                "leader_id": str(row["lead_portfolio_id"]),
+                "leader_name": str(row["nickname"] or "unknown")[:80],
+                "state": str(row["state"])[:24],
+                "reason_codes": reason_codes,
+                "occurred_at": row["occurred_at"].astimezone(UTC).isoformat(),
+                "failure_count_last_10_minutes": int(
+                    row["failure_count_last_10_minutes"]
+                ),
+            }
+        )
+    return failures
 
 
 def _reconciliation_status(
@@ -636,6 +710,10 @@ def main() -> int:
         "service_states": unit_states,
         "recent_service_incidents": recent_service_incidents,
         "recent_signal_errors": recent_signal_errors,
+        "recent_leader_poll_failures": _recent_leader_poll_failures(
+            database_url,
+            now=datetime.now(UTC),
+        ),
         "recent_selection_failures": _recent_selection_failures(
             database_url,
             now=datetime.now(UTC),

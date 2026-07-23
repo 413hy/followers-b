@@ -52,6 +52,7 @@ def _activity(**overrides: int) -> CandidateActivity:
 
 
 def test_slot_layout_is_one_long_and_two_short() -> None:
+    assert len(LeaderSlot) == 10
     assert SelectionStrategy.LONG_TERM.slots == (LeaderSlot.LONG_TERM,)
     assert SelectionStrategy.SHORT_TERM.slots == (
         LeaderSlot.SHORT_TERM_1,
@@ -59,11 +60,12 @@ def test_slot_layout_is_one_long_and_two_short() -> None:
     )
     for slot in LeaderSlot:
         assert leader_slot_from_callback(leader_slot_callback(slot)) is slot
-    assert is_custom_slot(LeaderSlot.CUSTOM_1)
-    assert is_custom_slot(LeaderSlot.CUSTOM_2)
+    for number in range(1, 8):
+        slot = LeaderSlot[f"CUSTOM_{number}"]
+        assert is_custom_slot(slot)
+        assert slot not in SelectionStrategy.LONG_TERM.slots
+        assert slot not in SelectionStrategy.SHORT_TERM.slots
     assert not is_custom_slot(LeaderSlot.LONG_TERM)
-    assert LeaderSlot.CUSTOM_1 not in SelectionStrategy.LONG_TERM.slots
-    assert LeaderSlot.CUSTOM_2 not in SelectionStrategy.SHORT_TERM.slots
 
 
 def test_short_rotation_preserves_reselected_incumbent_line() -> None:

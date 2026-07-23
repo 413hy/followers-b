@@ -1,15 +1,18 @@
 # Handoff state
 
-Updated: `2026-07-21`
+Updated: `2026-07-23`
 
 ## Read first
 
-1. `README.md`
-2. `IMPLEMENTATION_STATUS.md`
-3. `docs/deployment/copy-trading-vps.md`
-4. `docs/architecture/copy-trading-testnet.md`
-5. `docs/architecture/copy-trading-failure-matrix.md`
-6. `chat/CONTINUE_WITH_ANOTHER_AI.md`
+1. `AGENTS.md`
+2. `README.md`
+3. `docs/PROJECT_OVERVIEW.md`
+4. `IMPLEMENTATION_STATUS.md`
+5. `docs/deployment/codex-vps-handoff.md`
+6. `docs/deployment/copy-trading-vps.md`
+7. `docs/architecture/copy-trading-testnet.md`
+8. `docs/architecture/copy-trading-failure-matrix.md`
+9. `chat/CONTINUE_WITH_ANOTHER_AI.md`
 
 ## Repository purpose
 
@@ -23,7 +26,8 @@ checks merely to make a failed operation continue.
 
 ## Runtime model
 
-- `aiq-copy-poller.service`: 30-second public history polling and Testnet execution.
+- `aiq-copy-poller.service`: 10-second public history polling and Testnet execution.
+- `aiq-testnet-user-stream.service`: persistent Testnet account-event evidence observer.
 - `aiq-copy-telegram.service`: authorized Telegram dashboard and notifications.
 - `aiq-copy-watchdog.timer`: deterministic 30-minute health and reconciliation checks.
 - `aiq-copy-codex-audit.timer`: hourly sanitized Codex review.
