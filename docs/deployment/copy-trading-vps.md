@@ -45,7 +45,7 @@ systemctl enable --now docker.service
 
 ```bash
 install -d -m 0755 /root/quantify
-git clone https://github.com/413hy/follwers-b.git /root/quantify/ai-quant-system
+git clone https://github.com/413hy/followers-b.git /root/quantify/ai-quant-system
 cd /root/quantify/ai-quant-system
 git rev-parse HEAD
 sed -n '1,240p' AGENTS.md

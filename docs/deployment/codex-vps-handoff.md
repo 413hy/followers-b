@@ -8,7 +8,7 @@
 可以把下面这段原样交给新 VPS 上的 Codex：
 
 ```text
-请把 https://github.com/413hy/follwers-b 部署为 Binance USD-M Futures Testnet
+请把 https://github.com/413hy/followers-b 部署为 Binance USD-M Futures Testnet
 跟单系统。仓库当前 main 是代码唯一基准。
 
 先完整阅读仓库根目录 AGENTS.md、README.md、docs/PROJECT_OVERVIEW.md、
