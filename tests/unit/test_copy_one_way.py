@@ -118,6 +118,127 @@ def test_position_history_uses_exact_public_path_and_parses_closed_intervals() -
     ]
 
 
+def test_position_history_parses_partially_closed_interval_with_bounded_evidence() -> None:
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers, body
+        payload = {
+            "success": True,
+            "code": "000000",
+            "data": {
+                "list": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "side": "Long",
+                        "opened": START + 50,
+                        "closed": None,
+                        "status": "Partially Closed",
+                        "updateTime": START + 250,
+                        "maxOpenInterest": "3",
+                        "closedVolume": "0",
+                    }
+                ],
+                "total": 1,
+            },
+        }
+        return PublicHttpResult(200, {}, json.dumps(payload).encode())
+
+    page = BinancePublicCopyClient(transport=transport).position_history(
+        LEADER_ID,
+        page_size=100,
+    )
+
+    assert page.positions == (
+        ClosedLeaderPosition(
+            symbol="ETHUSDT",
+            position_side=SourcePositionSide.LONG,
+            opened_at_ms=START + 50,
+            closed_at_ms=None,
+            maximum_open_quantity=Decimal("3"),
+            closed_quantity=Decimal("0"),
+            evidence_updated_at_ms=START + 250,
+        ),
+    )
+
+
+def test_position_history_rejects_unbounded_null_close_row() -> None:
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del method, url, headers, body
+        payload = {
+            "success": True,
+            "code": "000000",
+            "data": {
+                "list": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "side": "Long",
+                        "opened": START + 50,
+                        "closed": None,
+                        "status": "Partially Closed",
+                        "updateTime": None,
+                        "maxOpenInterest": "3",
+                        "closedVolume": "1",
+                    }
+                ],
+                "total": 1,
+            },
+        }
+        return PublicHttpResult(200, {}, json.dumps(payload).encode())
+
+    with pytest.raises(RuntimeError, match="COPY_POSITION_HISTORY_ROW_INVALID"):
+        BinancePublicCopyClient(transport=transport).position_history(
+            LEADER_ID,
+            page_size=100,
+        )
+
+
+def test_open_position_interval_resolves_only_orders_covered_by_its_watermark() -> None:
+    active_long = ClosedLeaderPosition(
+        symbol="ETHUSDT",
+        position_side=SourcePositionSide.LONG,
+        opened_at_ms=START + 50,
+        closed_at_ms=None,
+        maximum_open_quantity=Decimal("3"),
+        closed_quantity=Decimal("1"),
+        evidence_updated_at_ms=START + 250,
+    )
+    covered_reduction = _both_order(
+        side="SELL",
+        quantity="1",
+        offset_ms=200,
+        total_pnl="5",
+    )
+    stale_reduction = _both_order(
+        side="SELL",
+        quantity="1",
+        offset_ms=300,
+        total_pnl="5",
+    )
+
+    resolved = resolve_one_way_orders(
+        (covered_reduction,),
+        closed_positions=(active_long,),
+    )
+
+    assert [(order.position_side, order.executed_quantity) for order in resolved] == [
+        (SourcePositionSide.LONG, Decimal("1")),
+    ]
+    with pytest.raises(OneWayResolutionError, match="REDUCTION_STATE_MISSING"):
+        resolve_one_way_orders(
+            (stale_reduction,),
+            closed_positions=(active_long,),
+        )
+
+
 def test_closed_intervals_resolve_historical_one_way_orders_and_current_open() -> None:
     opened = _both_order(side="SELL", quantity="3", offset_ms=100)
     closed = _both_order(side="BUY", quantity="3", offset_ms=200, total_pnl="25")

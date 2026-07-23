@@ -28,8 +28,9 @@ def resolve_one_way_orders(
 ) -> tuple[PublicLeaderOrder, ...]:
     """Resolve new ``BOTH`` fills into LONG/SHORT cumulative order views.
 
-    Closed-position intervals are authoritative for historical baseline rows.
-    Later operations are resolved against the persisted source quantity.  A
+    Closed intervals are authoritative for historical baseline rows. Open or
+    partially closed intervals are direction evidence only through their public
+    update watermark. Later operations are resolved against the persisted source quantity. A
     one-way order that crosses zero is split into an old-side reduction and a
     new-side increase, preserving per-side idempotency.
     """
@@ -139,15 +140,22 @@ def _closed_interval(
     order: PublicLeaderOrder,
     positions: tuple[ClosedLeaderPosition, ...],
 ) -> ClosedLeaderPosition | None:
-    matches = tuple(
-        position
-        for position in positions
-        if position.symbol == order.symbol
-        and (
-            position.opened_at_ms <= order.order_time_ms <= position.closed_at_ms
-            or position.opened_at_ms <= order.update_time_ms <= position.closed_at_ms
+    matches: list[ClosedLeaderPosition] = []
+    for position in positions:
+        interval_end_ms = (
+            position.closed_at_ms
+            if position.closed_at_ms is not None
+            else position.evidence_updated_at_ms
         )
-    )
+        if (
+            position.symbol == order.symbol
+            and interval_end_ms is not None
+            and (
+                position.opened_at_ms <= order.order_time_ms <= interval_end_ms
+                or position.opened_at_ms <= order.update_time_ms <= interval_end_ms
+            )
+        ):
+            matches.append(position)
     if len(matches) > 1:
         raise OneWayResolutionError("COPY_ONE_WAY_POSITION_INTERVAL_OVERLAP")
     return matches[0] if matches else None
@@ -199,6 +207,12 @@ def _allocate_with_closed_interval(
         (SourcePositionSide.SHORT, OrderSide.SELL),
     }
     if increasing_interval:
+        return ((interval_side, delta),)
+    if interval.closed_at_ms is None:
+        # The public snapshot still reports this side as open at
+        # evidence_updated_at_ms. A reducing order covered by that watermark
+        # therefore belongs to the still-open side. Orders newer than the
+        # watermark are deliberately excluded by _closed_interval.
         return ((interval_side, delta),)
     previously_allocated_reduction = previous_by_side.get(interval_side, Decimal("0"))
     remaining_closed_quantity = max(

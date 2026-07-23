@@ -58,12 +58,15 @@ class OrderHistoryPage:
 
 @dataclass(frozen=True, slots=True)
 class ClosedLeaderPosition:
+    """A public position interval that may still be open at its evidence watermark."""
+
     symbol: str
     position_side: SourcePositionSide
     opened_at_ms: int
-    closed_at_ms: int
+    closed_at_ms: int | None
     maximum_open_quantity: Decimal
     closed_quantity: Decimal
+    evidence_updated_at_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,7 +452,7 @@ class BinancePublicCopyClient:
         page_number: int = 1,
         page_size: int = 50,
     ) -> PositionHistoryPage:
-        """Read public closed-position intervals used to resolve one-way orders."""
+        """Read public position intervals used to resolve one-way orders."""
 
         if not re.fullmatch(r"[0-9]{10,24}", lead_portfolio_id):
             raise ValueError("copy leader portfolio ID is invalid")
@@ -476,6 +479,35 @@ class BinancePublicCopyClient:
                 raw_side = row.get("side")
                 opened = row.get("opened")
                 closed = row.get("closed")
+                status = row.get("status")
+                update_time = row.get("updateTime")
+                open_interval = closed is None
+                if (
+                    not isinstance(symbol, str)
+                    or not re.fullmatch(r"[A-Z0-9]{3,24}", symbol)
+                    or raw_side not in {"Long", "Short"}
+                    or not isinstance(opened, int)
+                    or isinstance(opened, bool)
+                    or opened <= 0
+                    or (
+                        open_interval
+                        and (
+                            status not in {"Open", "Partially Closed"}
+                            or not isinstance(update_time, int)
+                            or isinstance(update_time, bool)
+                            or update_time < opened
+                        )
+                    )
+                    or (
+                        not open_interval
+                        and (
+                            not isinstance(closed, int)
+                            or isinstance(closed, bool)
+                            or closed < opened
+                        )
+                    )
+                ):
+                    raise PublicCopyDataError("COPY_POSITION_HISTORY_ROW_INVALID")
                 maximum_open_quantity = _position_quantity(
                     row.get("maxOpenInterest"),
                     "maxOpenInterest",
@@ -483,19 +515,8 @@ class BinancePublicCopyClient:
                 closed_quantity = _position_quantity(
                     row.get("closedVolume"),
                     "closedVolume",
+                    allow_zero=open_interval,
                 )
-                if (
-                    not isinstance(symbol, str)
-                    or not re.fullmatch(r"[A-Z0-9]{3,24}", symbol)
-                    or raw_side not in {"Long", "Short"}
-                    or not isinstance(opened, int)
-                    or isinstance(opened, bool)
-                    or not isinstance(closed, int)
-                    or isinstance(closed, bool)
-                    or opened <= 0
-                    or closed < opened
-                ):
-                    raise PublicCopyDataError("COPY_POSITION_HISTORY_ROW_INVALID")
                 positions.append(
                     ClosedLeaderPosition(
                         symbol=symbol,
@@ -508,6 +529,7 @@ class BinancePublicCopyClient:
                         closed_at_ms=closed,
                         maximum_open_quantity=maximum_open_quantity,
                         closed_quantity=closed_quantity,
+                        evidence_updated_at_ms=(update_time if open_interval else None),
                     )
                 )
         except PublicCopyDataError as error:
@@ -668,13 +690,18 @@ def _disambiguate_limit_ladder_orders(
     return tuple(resolved)
 
 
-def _position_quantity(value: object, field: str) -> Decimal:
+def _position_quantity(
+    value: object,
+    field: str,
+    *,
+    allow_zero: bool = False,
+) -> Decimal:
     if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
         raise PublicCopyDataError(f"COPY_POSITION_HISTORY_{field.upper()}_INVALID")
     try:
         quantity = Decimal(str(value))
     except InvalidOperation as error:
         raise PublicCopyDataError(f"COPY_POSITION_HISTORY_{field.upper()}_INVALID") from error
-    if not quantity.is_finite() or quantity <= 0:
+    if not quantity.is_finite() or quantity < 0 or (quantity == 0 and not allow_zero):
         raise PublicCopyDataError(f"COPY_POSITION_HISTORY_{field.upper()}_INVALID")
     return quantity

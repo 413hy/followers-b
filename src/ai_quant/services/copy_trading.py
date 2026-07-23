@@ -7,7 +7,7 @@ import json
 import signal
 import subprocess  # nosec B404 -- fixed systemctl path and unit
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -30,17 +30,35 @@ from ai_quant.copy_trading.repository import CopyRepositoryError, CopyTradingRep
 
 _STOP = False
 _CODEX_AUDIT_UNIT = "aiq-copy-codex-audit.service"
+_INCIDENT_REAUDIT_SECONDS = 300.0
 
 
 class _CodexIncidentTrigger:
-    """Start one immediate audit for each persisted incident in this poller process."""
+    """Start immediate and bounded repeat audits for persistent incidents."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        reaudit_seconds: float = _INCIDENT_REAUDIT_SECONDS,
+    ) -> None:
+        if reaudit_seconds < 60:
+            raise ValueError("copy incident reaudit interval is too short")
+        self._clock = clock
+        self._reaudit_seconds = reaudit_seconds
         self._requested: set[str] = set()
         self._pending: set[str] = set()
+        self._last_requested_at: dict[str, float] = {}
 
     def __call__(self, incident_key: str) -> None:
-        if incident_key in self._requested:
+        last_requested = self._last_requested_at.get(incident_key)
+        if (
+            incident_key in self._pending
+            or (
+                last_requested is not None
+                and self._clock() - last_requested < self._reaudit_seconds
+            )
+        ):
             return
         self._pending.add(incident_key)
         self.flush()
@@ -98,9 +116,15 @@ class _CodexIncidentTrigger:
         delivered = set(self._pending)
         self._pending.clear()
         self._requested.update(delivered)
+        requested_at = self._clock()
+        for incident_key in delivered:
+            self._last_requested_at[incident_key] = requested_at
         if len(self._requested) > 2048:
             self._requested.clear()
             self._requested.update(delivered)
+            self._last_requested_at = {
+                incident_key: requested_at for incident_key in delivered
+            }
         print(
             json.dumps(
                 {
