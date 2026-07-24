@@ -1498,7 +1498,7 @@ class TelegramMenuRouter:
 
 
 def persistent_reply_keyboard() -> dict[str, object]:
-    """Navigation keyboard that clients are requested to keep visible."""
+    """Navigation keyboard kept available behind the client keyboard icon."""
 
     return {
         "keyboard": [
@@ -1507,9 +1507,9 @@ def persistent_reply_keyboard() -> dict[str, object]:
             [{"text": "💹 盈亏"}, {"text": "⚙️ 控制"}],
         ],
         "resize_keyboard": True,
-        "is_persistent": True,
+        "is_persistent": False,
         "one_time_keyboard": False,
-        "input_field_placeholder": "底部导航常驻; 可用输入框旁图标切换",
+        "input_field_placeholder": "点输入框旁的键盘图标展开或收起导航",
     }
 
 

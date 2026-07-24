@@ -530,9 +530,9 @@ def test_reply_keyboard_is_safe_compact_and_toggleable_from_the_input_field() ->
     ]
     assert not any(label in labels for label in ("暂停", "恢复", "全部减仓"))
     assert keyboard["resize_keyboard"] is True
-    assert keyboard["is_persistent"] is True
+    assert keyboard["is_persistent"] is False
     assert keyboard["one_time_keyboard"] is False
-    assert keyboard["input_field_placeholder"] == "底部导航常驻; 可用输入框旁图标切换"
+    assert keyboard["input_field_placeholder"] == "点输入框旁的键盘图标展开或收起导航"
 
 
 def test_contextual_inline_buttons_separate_navigation_from_dangerous_controls() -> None:
@@ -1498,7 +1498,7 @@ def test_start_installs_bottom_keyboard_and_text_controls_still_require_confirma
     base = {"chat": {"id": 42}, "from": {"id": 42}}
     router.handle({"message": {**base, "text": "/start"}})
     assert "keyboard" in calls[-1][1]["reply_markup"]  # type: ignore[operator]
-    assert calls[-1][1]["reply_markup"]["is_persistent"] is True  # type: ignore[index]
+    assert calls[-1][1]["reply_markup"]["is_persistent"] is False  # type: ignore[index]
     assert calls[-1][1]["reply_markup"]["one_time_keyboard"] is False  # type: ignore[index]
 
     router.handle({"message": {**base, "text": "/menu"}})

@@ -146,7 +146,7 @@ def main() -> int:
         try:
             client.send_message(
                 startup_chat_id,
-                "⌨️ 底部导航键盘已恢复并设为常驻。",
+                "⌨️ 导航键盘已恢复。收起后可用输入框旁的小图标再次展开。",
                 reply_markup=persistent_reply_keyboard(),
                 disable_notification=True,
             )
