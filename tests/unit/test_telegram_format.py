@@ -65,6 +65,7 @@ def test_telegram_environment_labels_are_explicit_and_validated() -> None:
         ("copy_leader_follow_multiplier_change", "leaders"),
         ("copy_entry_margin_limit_change", "funds"),
         ("copy_leader_lock_change", "leaders"),
+        ("copy_leader_symbol_stop_triggered", "positions"),
         ("copy_health", "health"),
         ("unknown", "status"),
     ],
@@ -110,6 +111,64 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
     assert "交易所实际占用 88.56 U" in text
     assert "07-21 09:30:00" in text
     assert _notification_contextual_view(payload) is None
+
+
+def test_leader_symbol_stop_notification_explains_netting_isolation_and_cooldown() -> None:
+    payload = {
+        "event": "copy_leader_symbol_stop_triggered",
+        "lead_portfolio_id": "5014426348046646785",
+        "leader_nickname": "测试带单员",
+        "symbol": "BTCUSDT",
+        "net_position_pnl_usdt": "-10.25",
+        "loss_limit_usdt": "10",
+        "position_pnl_breakdown": [
+            {"position_side": "LONG", "total_pnl_usdt": "-15"},
+            {"position_side": "SHORT", "total_pnl_usdt": "4.75"},
+        ],
+        "blocked_until": "2026-07-26T03:00:00+00:00",
+        "occurred_at": "2026-07-24T03:00:00+00:00",
+        "reason_codes": [
+            "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED",
+            "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H",
+        ],
+    }
+
+    text = _notification_text(payload)
+
+    assert "双向合计盈亏: -10.25 U (多 -15 U | 空 +4.75 U)" in text
+    assert "其他带单员、其他币种均不受影响" in text
+    assert "减仓和平仓仍允许" in text
+    assert "07-26 11:00:00 (48小时后自动恢复)" in text
+
+
+def test_stop_generated_close_notification_has_distinct_title_and_scope() -> None:
+    text = _notification_text(
+        {
+            "event": "copy_signal_decision",
+            "state": "FILLED",
+            "signal_origin": "CONTROL",
+            "leader_symbol_stop_event_id": "7" * 64,
+            "stop_net_position_pnl_usdt": "-10.25",
+            "stop_loss_limit_usdt": "10",
+            "stop_blocked_until": "2026-07-26T03:00:00+00:00",
+            "symbol": "BTCUSDT",
+            "position_side": "LONG",
+            "signal_kind": "REDUCE",
+            "local_quantity": "0.01",
+            "lead_portfolio_id": "5014426348046646785",
+            "leader_nickname": "测试带单员",
+            "leader_reference_price": "65000",
+            "order_type": "MARKET",
+            "system_fill_price": "64990",
+            "source_occurred_at": "2026-07-24T03:00:00+00:00",
+            "occurred_at": "2026-07-24T03:00:01+00:00",
+            "reason_codes": [],
+        }
+    )
+
+    assert "✅ 单币种止损平仓成功" in text
+    assert "仅平该带单员此币种" in text
+    assert "冷却至 07-26 11:00:00" in text
 
 
 def test_entry_margin_change_notification_is_explicit_and_returns_to_funds() -> None:

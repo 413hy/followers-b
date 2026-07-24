@@ -32,7 +32,7 @@ from ai_quant.copy_trading.telegram_state import PostgresTelegramState
 from ai_quant.notifications.telegram_bot import ControlAction
 
 LEADER_ID = "5000000000000000001"
-NOW = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 def _arguments() -> argparse.Namespace:
@@ -816,7 +816,7 @@ def main() -> int:
         leverage=20,
         occurred_at=trade_at,
     )
-    repository.record_account_valuation(
+    healthy_valuation_id = repository.record_account_valuation(
         exchange_wallet_balance_usdt=Decimal("5000"),
         exchange_margin_balance_usdt=Decimal("5000.5"),
         exchange_available_balance_usdt=Decimal("4999"),
@@ -833,6 +833,74 @@ def main() -> int:
             ),
         ),
         observed_at=trade_at + timedelta(seconds=1),
+    )
+    assert (
+        repository.enforce_leader_symbol_stops(
+            valuation_event_id=healthy_valuation_id,
+            position_marks=(
+                AccountPositionMark(
+                    symbol="ETHUSDT",
+                    position_side=PositionSide.LONG,
+                    exchange_quantity=Decimal("0.01"),
+                    mark_price=Decimal("2050"),
+                ),
+            ),
+            occurred_at=trade_at + timedelta(seconds=1),
+        )
+        == ()
+    )
+    stop_at = trade_at + timedelta(seconds=1, milliseconds=100)
+    stop_marks = (
+        AccountPositionMark(
+            symbol="ETHUSDT",
+            position_side=PositionSide.LONG,
+            exchange_quantity=Decimal("0.01"),
+            mark_price=Decimal("500"),
+        ),
+    )
+    stop_valuation_id = repository.record_account_valuation(
+        exchange_wallet_balance_usdt=Decimal("5000"),
+        exchange_margin_balance_usdt=Decimal("4985"),
+        exchange_available_balance_usdt=Decimal("4984"),
+        envelope_baseline_usdt=Decimal("5000"),
+        operating_envelope_usdt=Decimal("150"),
+        total_initial_margin_usdt=Decimal("1"),
+        total_maintenance_margin_usdt=Decimal("0.1"),
+        position_marks=stop_marks,
+        observed_at=stop_at,
+    )
+    active_stops = repository.enforce_leader_symbol_stops(
+        valuation_event_id=stop_valuation_id,
+        position_marks=stop_marks,
+        occurred_at=stop_at,
+    )
+    assert len(active_stops) == 1
+    assert active_stops[0].lead_portfolio_id == LEADER_ID
+    assert active_stops[0].symbol == "ETHUSDT"
+    assert active_stops[0].net_position_pnl_usdt == Decimal("-15")
+    assert active_stops[0].blocked_until == stop_at + timedelta(hours=48)
+    assert active_stops[0].newly_triggered is True
+    active_stop_read = repository.active_leader_symbol_stop(
+        lead_portfolio_id=LEADER_ID,
+        symbol="ETHUSDT",
+        occurred_at=stop_at,
+    )
+    assert active_stop_read is not None
+    assert active_stop_read.stop_event_id == active_stops[0].stop_event_id
+    stop_signals = repository.recoverable_leader_symbol_stop_signals(
+        active_stops[0].stop_event_id
+    )
+    assert len(stop_signals) == 1
+    assert stop_signals[0].lead_portfolio_id == LEADER_ID
+    assert stop_signals[0].symbol == "ETHUSDT"
+    assert stop_signals[0].position_side is PositionSide.LONG
+    assert (
+        repository.active_leader_symbol_stop(
+            lead_portfolio_id=other_leader_id,
+            symbol="ETHUSDT",
+            occurred_at=stop_at,
+        )
+        is None
     )
     close_order = _order(
         order_time_ms=500,
@@ -975,7 +1043,7 @@ def main() -> int:
         leader.lead_portfolio_id,
     )
     notifications = telegram.claim_notifications()
-    assert len(notifications) == 17, [item.text for item in notifications]
+    assert len(notifications) == 18, [item.text for item in notifications]
     assert any("source integration leader" in item.text for item in notifications)
     assert any("database integration leader" in item.text for item in notifications)
     assert any("3倍" in item.text for item in notifications)
@@ -986,6 +1054,8 @@ def main() -> int:
     assert any("已解锁" in item.text for item in notifications)
     assert any("本轮自动换人已取消" in item.text for item in notifications)
     assert any("交易资金净值已恢复为 150 U" in item.text for item in notifications)
+    assert any("双向合计盈亏: -15 U" in item.text for item in notifications)
+    assert any("其他带单员、其他币种均不受影响" in item.text for item in notifications)
     for notification in notifications:
         telegram.complete_notification(notification.message_id, delivered=True)
 

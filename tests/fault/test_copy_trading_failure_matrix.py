@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -41,6 +41,7 @@ from ai_quant.copy_trading.models import (
 )
 from ai_quant.copy_trading.repository import (
     LeaderAssignment,
+    LeaderSymbolStop,
     RuntimeControl,
 )
 
@@ -77,6 +78,24 @@ def _assignment(
         portfolio_weight=Decimal("1"),
         slot=slot,
         follow_multiplier=follow_multiplier,
+    )
+
+
+def _leader_symbol_stop(
+    *,
+    leader_id: str = "5108371059752839168",
+    symbol: str = "ETHUSDT",
+) -> LeaderSymbolStop:
+    return LeaderSymbolStop(
+        stop_event_id="7" * 64,
+        lead_portfolio_id=leader_id,
+        leader_nickname="leader",
+        symbol=symbol,
+        net_position_pnl_usdt=Decimal("-10.5"),
+        loss_limit_usdt=Decimal("10"),
+        triggered_at=NOW,
+        blocked_until=NOW + timedelta(hours=48),
+        newly_triggered=True,
     )
 
 
@@ -268,6 +287,8 @@ class FakeRepository:
         self.ledger = VirtualPositionLedger()
         self.source_positions_before: dict[str, Decimal] = {}
         self.retired_drained_leaders: list[datetime] = []
+        self.active_stops: tuple[LeaderSymbolStop, ...] = ()
+        self.stop_signals: tuple[NormalizedSignal, ...] = ()
 
     def active_assignments(self) -> tuple[LeaderAssignment, ...]:
         return self.assignments
@@ -309,6 +330,29 @@ class FakeRepository:
 
     def ensure_control_reduction_signals(self, *args: Any, **kwargs: Any) -> tuple[Any, ...]:
         return ()
+
+    def enforce_leader_symbol_stops(self, **kwargs: Any) -> tuple[LeaderSymbolStop, ...]:
+        assert len(str(kwargs.get("valuation_event_id"))) == 64
+        return self.active_stops
+
+    def active_leader_symbol_stop(self, **kwargs: Any) -> LeaderSymbolStop | None:
+        return next(
+            (
+                stop
+                for stop in self.active_stops
+                if stop.lead_portfolio_id == kwargs.get("lead_portfolio_id")
+                and stop.symbol == kwargs.get("symbol")
+                and stop.blocked_until > kwargs.get("occurred_at")
+            ),
+            None,
+        )
+
+    def recoverable_leader_symbol_stop_signals(
+        self,
+        stop_event_id: str,
+    ) -> tuple[NormalizedSignal, ...]:
+        assert len(stop_event_id) == 64
+        return self.stop_signals
 
     def recoverable_signals(self, *, limit: int = 100) -> tuple[NormalizedSignal, ...]:
         assert 1 <= limit <= 1000
@@ -374,8 +418,9 @@ class FakeRepository:
     def ensure_envelope_baseline(self, **kwargs: Any) -> Decimal:
         return Decimal("5000")
 
-    def record_account_valuation(self, **kwargs: Any) -> None:
+    def record_account_valuation(self, **kwargs: Any) -> str:
         self.account_valuations.append(kwargs)
+        return "9" * 64
 
     def portfolio_usage(self, **kwargs: Any) -> PortfolioUsage:
         return PortfolioUsage(
@@ -707,6 +752,134 @@ def test_paused_control_cancels_a_still_pending_claim() -> None:
     assert repository.virtual_records == []
     assert repository.decisions[0][1] == "CANCELLED"
     assert executor.orders == []
+
+
+def test_leader_symbol_cooldown_blocks_only_matching_leader_and_symbol() -> None:
+    stopped = _signal()
+    unaffected = replace(
+        stopped,
+        signal_id="2" * 64,
+        source_event_key="3" * 64,
+        source_identity_key="4" * 64,
+        lead_portfolio_id="5108371059752839169",
+    )
+    repository = FakeRepository(
+        assignments=(
+            _assignment(stopped.lead_portfolio_id),
+            _assignment(unaffected.lead_portfolio_id, slot=LeaderSlot.SHORT_TERM_2),
+        ),
+        recovered=(stopped, unaffected),
+    )
+    repository.active_stops = (_leader_symbol_stop(),)
+    executor = FakeExecutor()
+
+    report = _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert report.processed_signal_count == 2
+    assert repository.decisions[0] == (
+        stopped.signal_id,
+        "RISK_REJECTED",
+        ("COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_ACTIVE",),
+    )
+    assert executor.orders[0].signal is unaffected
+    assert repository.decisions[-1][1] == "FILLED"
+
+
+def test_leader_symbol_stop_cancels_matching_pending_entry_before_recovery() -> None:
+    pending = _signal()
+    repository = FakeRepository(
+        assignments=(_assignment(),),
+        recovered=(pending,),
+        pending=(pending,),
+    )
+    repository.active_stops = (_leader_symbol_stop(),)
+    executor = FakeExecutor()
+    executor.claimed = CopyMarketOrder(
+        pending,
+        local_quantity=Decimal("0.011"),
+        leverage=20,
+        order_type=CopyOrderType.LIMIT,
+        limit_price=Decimal("2000"),
+        expires_at=None,
+    )
+    executor.pending_receipt = CopyExecutionReceipt(
+        signal_id=pending.signal_id,
+        client_order_id="aqc-stopped",
+        state=CopyExecutionState.REJECTED,
+        requested_quantity=Decimal("0.011"),
+        leverage=20,
+        filled_quantity=Decimal("0"),
+        average_price=Decimal("0"),
+        exchange_order_id="1",
+        reason_codes=(
+            "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP",
+            "COPY_ORDER_CANCELED",
+        ),
+    )
+
+    report = _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert report.processed_signal_count == 1
+    assert executor.cancel_reasons == [
+        "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP"
+    ]
+    assert repository.decisions == [
+        (
+            pending.signal_id,
+            "CANCELLED",
+            (
+                "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP",
+                "COPY_ORDER_CANCELED",
+            ),
+        )
+    ]
+    assert executor.orders == []
+
+
+def test_leader_symbol_stop_prioritizes_full_close_of_both_hedge_sides() -> None:
+    long_open = _signal()
+    short_open = replace(
+        long_open,
+        signal_id="5" * 64,
+        source_event_key="6" * 64,
+        position_side=PositionSide.SHORT,
+    )
+    long_close = replace(
+        _signal(kind=SignalKind.REDUCE),
+        signal_id="7" * 64,
+        source_event_key="8" * 64,
+        source_identity_key="9" * 64,
+    )
+    short_close = replace(
+        long_close,
+        signal_id="b" * 64,
+        source_event_key="c" * 64,
+        position_side=PositionSide.SHORT,
+    )
+    repository = FakeRepository(assignments=(_assignment(),))
+    repository.active_stops = (_leader_symbol_stop(),)
+    repository.stop_signals = (long_close, short_close)
+    repository.ledger.record_increase_fill(
+        long_open,
+        filled_local_quantity=Decimal("0.01"),
+        attributed_source_quantity=Decimal("1"),
+    )
+    repository.ledger.record_increase_fill(
+        short_open,
+        filled_local_quantity=Decimal("0.02"),
+        attributed_source_quantity=Decimal("2"),
+    )
+    executor = FakeExecutor()
+
+    report = _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert report.processed_signal_count == 2
+    assert [(order.signal.position_side, order.local_quantity) for order in executor.orders] == [
+        (PositionSide.LONG, Decimal("0.01")),
+        (PositionSide.SHORT, Decimal("0.02")),
+    ]
+    assert repository.ledger.position_for(long_open).local_quantity == 0
+    assert repository.ledger.position_for(short_open).local_quantity == 0
 
 
 def test_account_position_marks_derive_mark_from_signed_notional() -> None:

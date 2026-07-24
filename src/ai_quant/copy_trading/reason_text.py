@@ -22,6 +22,10 @@ _LABELS = {
     "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_DRAINING": (
         "该带单员正在退出跟单, 未成交的入场限价单已安全取消"
     ),
+    "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP": (
+        "该带单员在这个币种已触发10 U净亏损止损, "
+        "未成交的入场限价单已撤销, 不会在48小时冷却期内形成新仓位"
+    ),
     "COPY_PROTECTED_LIMIT_CANCELLED_EXTERNALLY": ("交易所侧已撤销这笔入场限价单, 系统不会重复下单"),
     "COPY_PROTECTED_LIMIT_EXPIRED": "入场限价单在有效期内未成交, 系统已自动撤销",
     "COPY_PROTECTED_LIMIT_PENDING": "入场限价单已提交, 正在等待成交",
@@ -97,6 +101,16 @@ _LABELS = {
         "人工清仓期间出现的新开仓已跳过, 清仓完成后只跟随后续新信号"
     ),
     "COPY_LEADER_DRAINING_NO_NEW_ENTRY": "该带单员正在等待退出, 本次不再建立新仓位",
+    "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED": (
+        "该带单员在这个币种的多仓与空仓合计盈亏已达到 -10 U止损线"
+    ),
+    "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H": (
+        "仅该带单员的这个币种进入48小时新开仓冷却, 其他带单员和币种不受影响"
+    ),
+    "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_ACTIVE": (
+        "该带单员的这个币种仍在止损后的48小时冷却期内, "
+        "本次新开仓或加仓已跳过; 减仓和平仓仍会执行"
+    ),
     "COPY_RECOVERED_LEADER_NO_LONGER_ASSIGNED": "恢复时该带单员已不在槽位中, 本次不再开仓",
     "COPY_EXISTING_POSITION_HISTORY_RECOVERED": (
         "系统重启后检测到该带单员仍有本系统持仓, 已补读停机期间的操作记录并继续同步"

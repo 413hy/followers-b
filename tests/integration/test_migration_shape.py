@@ -166,6 +166,25 @@ def test_copy_ten_slots_expand_every_durable_slot_constraint() -> None:
         assert table in migration
 
 
+def test_leader_symbol_stop_is_durable_scoped_and_append_only() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations/business/versions/0032_leader_symbol_stop.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "0032_leader_symbol_stop"' in migration
+    assert 'down_revision = "0031_ten_leader_slots"' in migration
+    for table in (
+        "leader_symbol_stop_events",
+        "leader_symbol_stop_signal_events",
+    ):
+        assert table in migration
+    assert "lead_portfolio_id" in migration
+    assert "symbol" in migration
+    assert "blocked_until" in migration
+    assert "reject_append_only_mutation" in migration
+
+
 def test_copy_source_resolution_epochs_are_append_only() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (

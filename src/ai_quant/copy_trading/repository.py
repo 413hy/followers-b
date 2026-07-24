@@ -21,6 +21,12 @@ from ai_quant.copy_trading.leader_slots import (
     SelectionStrategy,
     slot_replacement_wait,
 )
+from ai_quant.copy_trading.leader_symbol_stop import (
+    LEADER_SYMBOL_STOP_COOLDOWN,
+    LEADER_SYMBOL_STOP_LOSS_USDT,
+    LeaderSymbolPositionPnl,
+    aggregate_leader_symbol_pnl,
+)
 from ai_quant.copy_trading.ledger import VirtualPosition, VirtualPositionKey, VirtualPositionLedger
 from ai_quant.copy_trading.models import (
     LeaderLifecycle,
@@ -78,6 +84,19 @@ class AccountPositionMark:
             or not self.mark_price.is_finite()
         ):
             raise ValueError("copy account position mark is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderSymbolStop:
+    stop_event_id: str
+    lead_portfolio_id: str
+    leader_nickname: str
+    symbol: str
+    net_position_pnl_usdt: Decimal
+    loss_limit_usdt: Decimal
+    triggered_at: datetime
+    blocked_until: datetime
+    newly_triggered: bool = False
 
 
 class CopyTradingRepository:
@@ -1941,6 +1960,492 @@ class CopyTradingRepository:
             raise CopyRepositoryError("COPY_CONTROL_REDUCTION_SIGNAL_FAILED") from error
         return tuple(created)
 
+    def enforce_leader_symbol_stops(
+        self,
+        *,
+        valuation_event_id: str,
+        position_marks: tuple[AccountPositionMark, ...],
+        occurred_at: datetime,
+        loss_limit_usdt: Decimal = LEADER_SYMBOL_STOP_LOSS_USDT,
+        cooldown: timedelta = LEADER_SYMBOL_STOP_COOLDOWN,
+    ) -> tuple[LeaderSymbolStop, ...]:
+        """Activate and recover isolated leader/symbol stops from current position PnL.
+
+        PnL is netted across LONG and SHORT only inside the same leader and symbol.
+        Every active cooldown continuously derives close signals from the latest
+        append-only virtual-position events, so a late entry fill or process restart
+        cannot leave risk behind.
+        """
+
+        _require_utc(occurred_at)
+        if len(valuation_event_id) != 64:
+            raise ValueError("copy valuation event ID is invalid")
+        if (
+            not loss_limit_usdt.is_finite()
+            or loss_limit_usdt <= 0
+            or cooldown <= timedelta(0)
+        ):
+            raise ValueError("copy leader symbol stop policy is invalid")
+        mark_keys = {(mark.symbol, mark.position_side) for mark in position_marks}
+        if len(mark_keys) != len(position_marks):
+            raise ValueError("copy account position marks contain duplicates")
+        marks_by_key = {
+            (mark.symbol, mark.position_side): mark.mark_price for mark in position_marks
+        }
+        newly_triggered_ids: set[str] = set()
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    ("copy-leader-symbol-stop",),
+                )
+                cursor.execute(
+                    """
+                    WITH latest AS (
+                      SELECT DISTINCT ON (lead_portfolio_id,symbol,position_side)
+                             pnl_event_id,position_event_id,lead_portfolio_id,symbol,
+                             position_side,resulting_quantity,
+                             resulting_average_entry_price,observed_at
+                        FROM copytrading.leader_pnl_events
+                       ORDER BY lead_portfolio_id,symbol,position_side,
+                                observed_at DESC,pnl_event_id DESC
+                    )
+                    SELECT latest.*,
+                           coalesce(position_cycle.realized_pnl_usdt,0)
+                             AS cycle_realized_pnl_usdt
+                      FROM latest
+                      LEFT JOIN LATERAL (
+                        SELECT started.observed_at,started.pnl_event_id
+                          FROM copytrading.leader_pnl_events AS started
+                         WHERE started.lead_portfolio_id=latest.lead_portfolio_id
+                           AND started.symbol=latest.symbol
+                           AND started.position_side=latest.position_side
+                           AND started.previous_quantity=0
+                           AND started.resulting_quantity>0
+                           AND (started.observed_at,started.pnl_event_id)
+                               <= (latest.observed_at,latest.pnl_event_id)
+                         ORDER BY started.observed_at DESC,started.pnl_event_id DESC
+                         LIMIT 1
+                      ) AS cycle_start ON true
+                      LEFT JOIN LATERAL (
+                        SELECT coalesce(sum(cycle.realized_pnl_delta_usdt),0)
+                                 AS realized_pnl_usdt
+                          FROM copytrading.leader_pnl_events AS cycle
+                         WHERE cycle.lead_portfolio_id=latest.lead_portfolio_id
+                           AND cycle.symbol=latest.symbol
+                           AND cycle.position_side=latest.position_side
+                           AND (cycle.observed_at,cycle.pnl_event_id)
+                               >= (cycle_start.observed_at,cycle_start.pnl_event_id)
+                           AND (cycle.observed_at,cycle.pnl_event_id)
+                               <= (latest.observed_at,latest.pnl_event_id)
+                      ) AS position_cycle ON true
+                     WHERE latest.resulting_quantity>0
+                     ORDER BY latest.lead_portfolio_id,latest.symbol,latest.position_side
+                    """,
+                    (),
+                )
+                pnl_positions: list[LeaderSymbolPositionPnl] = []
+                incomplete_keys: set[tuple[str, str]] = set()
+                for row in cursor.fetchall():
+                    leader_id = str(row["lead_portfolio_id"])
+                    symbol = str(row["symbol"])
+                    position_side = PositionSide(str(row["position_side"]))
+                    mark_price = marks_by_key.get((symbol, position_side))
+                    if mark_price is None:
+                        incomplete_keys.add((leader_id, symbol))
+                        continue
+                    pnl_positions.append(
+                        LeaderSymbolPositionPnl(
+                            lead_portfolio_id=leader_id,
+                            symbol=symbol,
+                            position_side=position_side,
+                            position_event_id=str(row["position_event_id"]),
+                            quantity=Decimal(str(row["resulting_quantity"])),
+                            average_entry_price=Decimal(
+                                str(row["resulting_average_entry_price"])
+                            ),
+                            mark_price=mark_price,
+                            cycle_realized_pnl_usdt=Decimal(
+                                str(row["cycle_realized_pnl_usdt"])
+                            ),
+                        )
+                    )
+                positions_by_key: dict[
+                    tuple[str, str], list[LeaderSymbolPositionPnl]
+                ] = {}
+                for position in pnl_positions:
+                    positions_by_key.setdefault(
+                        (position.lead_portfolio_id, position.symbol), []
+                    ).append(position)
+                totals = aggregate_leader_symbol_pnl(tuple(pnl_positions))
+                cursor.execute(
+                    """
+                    SELECT DISTINCT ON (lead_portfolio_id,symbol)
+                           stop_event_id,lead_portfolio_id,symbol,
+                           net_position_pnl_usdt,loss_limit_usdt,
+                           triggered_at,blocked_until
+                      FROM copytrading.leader_symbol_stop_events
+                     WHERE blocked_until>%s
+                     ORDER BY lead_portfolio_id,symbol,
+                              blocked_until DESC,triggered_at DESC,stop_event_id DESC
+                    """,
+                    (occurred_at,),
+                )
+                active_keys = {
+                    (str(row["lead_portfolio_id"]), str(row["symbol"]))
+                    for row in cursor.fetchall()
+                }
+                for (leader_id, symbol), net_pnl in sorted(totals.items()):
+                    key = (leader_id, symbol)
+                    if (
+                        key in incomplete_keys
+                        or key in active_keys
+                        or net_pnl > -loss_limit_usdt
+                    ):
+                        continue
+                    stop_event_id = _digest(
+                        {
+                            "lead_portfolio_id": leader_id,
+                            "loss_limit_usdt": str(loss_limit_usdt),
+                            "symbol": symbol,
+                            "type": "leader-symbol-stop",
+                            "valuation_event_id": valuation_event_id,
+                        }
+                    )
+                    blocked_until = occurred_at + cooldown
+                    breakdown = [
+                        {
+                            "average_entry_price": str(position.average_entry_price),
+                            "cycle_realized_pnl_usdt": str(
+                                position.cycle_realized_pnl_usdt
+                            ),
+                            "mark_price": str(position.mark_price),
+                            "position_event_id": position.position_event_id,
+                            "position_side": position.position_side.value,
+                            "quantity": str(position.quantity),
+                            "total_pnl_usdt": str(position.total_pnl_usdt),
+                            "unrealized_pnl_usdt": str(position.unrealized_pnl_usdt),
+                        }
+                        for position in positions_by_key[key]
+                    ]
+                    reason_codes = (
+                        "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED",
+                        "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H",
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO copytrading.leader_symbol_stop_events(
+                          stop_event_id,valuation_event_id,lead_portfolio_id,symbol,
+                          loss_limit_usdt,net_position_pnl_usdt,
+                          position_pnl_breakdown,blocked_until,reason_codes,triggered_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT DO NOTHING
+                        RETURNING stop_event_id
+                        """,
+                        (
+                            stop_event_id,
+                            valuation_event_id,
+                            leader_id,
+                            symbol,
+                            loss_limit_usdt,
+                            net_pnl,
+                            Jsonb(breakdown),
+                            blocked_until,
+                            Jsonb(list(reason_codes)),
+                            occurred_at,
+                        ),
+                    )
+                    if cursor.fetchone() is None:
+                        continue
+                    newly_triggered_ids.add(stop_event_id)
+                    active_keys.add(key)
+                    cursor.execute(
+                        """
+                        SELECT nickname FROM copytrading.leader_snapshots
+                         WHERE lead_portfolio_id=%s
+                         ORDER BY observed_at DESC,snapshot_id DESC LIMIT 1
+                        """,
+                        (leader_id,),
+                    )
+                    nickname_row = cursor.fetchone()
+                    nickname = (
+                        str(nickname_row["nickname"])
+                        if nickname_row is not None
+                        else "名称未知"
+                    )
+                    payload = {
+                        "event": "copy_leader_symbol_stop_triggered",
+                        "lead_portfolio_id": leader_id,
+                        "leader_nickname": nickname,
+                        "symbol": symbol,
+                        "net_position_pnl_usdt": str(net_pnl),
+                        "loss_limit_usdt": str(loss_limit_usdt),
+                        "position_pnl_breakdown": breakdown,
+                        "blocked_until": blocked_until.isoformat(),
+                        "reason_codes": list(reason_codes),
+                        "occurred_at": occurred_at.isoformat(),
+                    }
+                    cursor.execute(
+                        """
+                        INSERT INTO control.outbox(
+                          message_id,deduplication_key,topic,payload,payload_hash
+                        ) VALUES (%s,%s,'copy.telegram',%s,%s)
+                        ON CONFLICT (deduplication_key) DO NOTHING
+                        """,
+                        (
+                            _digest({"leader_symbol_stop": stop_event_id}),
+                            f"copy-leader-symbol-stop:{stop_event_id}",
+                            Jsonb(payload),
+                            _digest(payload),
+                        ),
+                    )
+                cursor.execute(
+                    """
+                    WITH active AS (
+                      SELECT DISTINCT ON (lead_portfolio_id,symbol)
+                             stop_event_id,lead_portfolio_id,symbol,
+                             net_position_pnl_usdt,loss_limit_usdt,
+                             triggered_at,blocked_until
+                        FROM copytrading.leader_symbol_stop_events
+                       WHERE blocked_until>%s
+                       ORDER BY lead_portfolio_id,symbol,
+                                blocked_until DESC,triggered_at DESC,stop_event_id DESC
+                    ), snapshot AS (
+                      SELECT DISTINCT ON (lead_portfolio_id)
+                             lead_portfolio_id,nickname
+                        FROM copytrading.leader_snapshots
+                       ORDER BY lead_portfolio_id,observed_at DESC,snapshot_id DESC
+                    )
+                    SELECT active.*,coalesce(snapshot.nickname,'名称未知') AS nickname
+                      FROM active LEFT JOIN snapshot USING(lead_portfolio_id)
+                     ORDER BY active.lead_portfolio_id,active.symbol
+                    """,
+                    (occurred_at,),
+                )
+                active_rows = list(cursor.fetchall())
+                for stop_row in active_rows:
+                    leader_id = str(stop_row["lead_portfolio_id"])
+                    symbol = str(stop_row["symbol"])
+                    stop_event_id = str(stop_row["stop_event_id"])
+                    cursor.execute(
+                        """
+                        WITH latest AS (
+                          SELECT DISTINCT ON (position_side)
+                                 position_event_id,position_side,
+                                 resulting_local_quantity,resulting_source_quantity,
+                                 reference_price
+                            FROM copytrading.virtual_position_events
+                           WHERE lead_portfolio_id=%s AND symbol=%s
+                           ORDER BY position_side,occurred_at DESC,position_event_id DESC
+                        )
+                        SELECT * FROM latest
+                         WHERE resulting_local_quantity>0
+                         ORDER BY position_side
+                        """,
+                        (leader_id, symbol),
+                    )
+                    for position_row in cursor.fetchall():
+                        position_event_id = str(position_row["position_event_id"])
+                        position_side = PositionSide(str(position_row["position_side"]))
+                        source_quantity = max(
+                            Decimal(str(position_row["resulting_source_quantity"])),
+                            Decimal(str(position_row["resulting_local_quantity"])),
+                        )
+                        identity = _digest(
+                            {
+                                "position_event_id": position_event_id,
+                                "stop_event_id": stop_event_id,
+                            }
+                        )
+                        signal_id = _digest({"leader_symbol_stop_reduction": identity})
+                        reference_price = marks_by_key.get(
+                            (symbol, position_side),
+                            Decimal(str(position_row["reference_price"])),
+                        )
+                        cursor.execute(
+                            """
+                            INSERT INTO copytrading.signals(
+                              signal_id,delta_event_id,lead_portfolio_id,symbol,
+                              position_side,signal_kind,source_delta_quantity,
+                              reference_price,occurred_at,signal_origin
+                            ) VALUES (%s,NULL,%s,%s,%s,'REDUCE',%s,%s,%s,'CONTROL')
+                            ON CONFLICT (signal_id) DO NOTHING
+                            RETURNING signal_id
+                            """,
+                            (
+                                signal_id,
+                                leader_id,
+                                symbol,
+                                position_side.value,
+                                source_quantity,
+                                reference_price,
+                                occurred_at,
+                            ),
+                        )
+                        if cursor.fetchone() is None:
+                            continue
+                        cursor.execute(
+                            """
+                            INSERT INTO copytrading.leader_symbol_stop_signal_events(
+                              stop_signal_event_id,stop_event_id,position_event_id,
+                              signal_id,occurred_at
+                            ) VALUES (%s,%s,%s,%s,%s)
+                            """,
+                            (
+                                _digest(
+                                    {
+                                        "position_event_id": position_event_id,
+                                        "signal_id": signal_id,
+                                        "stop_event_id": stop_event_id,
+                                    }
+                                ),
+                                stop_event_id,
+                                position_event_id,
+                                signal_id,
+                                occurred_at,
+                            ),
+                        )
+        except psycopg.Error as error:
+            raise CopyRepositoryError("COPY_LEADER_SYMBOL_STOP_ENFORCEMENT_FAILED") from error
+        return tuple(
+            LeaderSymbolStop(
+                stop_event_id=str(row["stop_event_id"]),
+                lead_portfolio_id=str(row["lead_portfolio_id"]),
+                leader_nickname=str(row["nickname"]),
+                symbol=str(row["symbol"]),
+                net_position_pnl_usdt=Decimal(str(row["net_position_pnl_usdt"])),
+                loss_limit_usdt=Decimal(str(row["loss_limit_usdt"])),
+                triggered_at=row["triggered_at"],
+                blocked_until=row["blocked_until"],
+                newly_triggered=str(row["stop_event_id"]) in newly_triggered_ids,
+            )
+            for row in active_rows
+        )
+
+    def active_leader_symbol_stop(
+        self,
+        *,
+        lead_portfolio_id: str,
+        symbol: str,
+        occurred_at: datetime,
+    ) -> LeaderSymbolStop | None:
+        """Return the durable cooldown that blocks only this leader/symbol pair."""
+
+        _require_utc(occurred_at)
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH snapshot AS (
+                      SELECT nickname FROM copytrading.leader_snapshots
+                       WHERE lead_portfolio_id=%s
+                       ORDER BY observed_at DESC,snapshot_id DESC LIMIT 1
+                    )
+                    SELECT stop_event_id,lead_portfolio_id,symbol,
+                           net_position_pnl_usdt,loss_limit_usdt,
+                           triggered_at,blocked_until,
+                           coalesce((SELECT nickname FROM snapshot),'名称未知') AS nickname
+                      FROM copytrading.leader_symbol_stop_events
+                     WHERE lead_portfolio_id=%s AND symbol=%s AND blocked_until>%s
+                     ORDER BY blocked_until DESC,triggered_at DESC,stop_event_id DESC
+                     LIMIT 1
+                    """,
+                    (
+                        lead_portfolio_id,
+                        lead_portfolio_id,
+                        symbol,
+                        occurred_at,
+                    ),
+                )
+                row = cursor.fetchone()
+        except psycopg.Error as error:
+            raise CopyRepositoryError("COPY_LEADER_SYMBOL_STOP_READ_FAILED") from error
+        if row is None:
+            return None
+        return LeaderSymbolStop(
+            stop_event_id=str(row["stop_event_id"]),
+            lead_portfolio_id=str(row["lead_portfolio_id"]),
+            leader_nickname=str(row["nickname"]),
+            symbol=str(row["symbol"]),
+            net_position_pnl_usdt=Decimal(str(row["net_position_pnl_usdt"])),
+            loss_limit_usdt=Decimal(str(row["loss_limit_usdt"])),
+            triggered_at=row["triggered_at"],
+            blocked_until=row["blocked_until"],
+        )
+
+    def recoverable_leader_symbol_stop_signals(
+        self,
+        stop_event_id: str,
+    ) -> tuple[NormalizedSignal, ...]:
+        """Prioritize close signals for one active stop ahead of the general queue."""
+
+        if len(stop_event_id) != 64:
+            raise ValueError("copy leader symbol stop event ID is invalid")
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH latest_decision AS (
+                      SELECT DISTINCT ON (signal_id) signal_id,state
+                        FROM copytrading.signal_decision_events
+                       ORDER BY signal_id,occurred_at DESC,decision_event_id DESC
+                    ), latest_submission AS (
+                      SELECT DISTINCT ON (signal_id) signal_id,state
+                        FROM copytrading.submission_events
+                       ORDER BY signal_id,occurred_at DESC,submission_event_id DESC
+                    ), attributed AS (
+                      SELECT DISTINCT signal_id
+                        FROM copytrading.virtual_position_events
+                    )
+                    SELECT signal.signal_id,signal.lead_portfolio_id,signal.symbol,
+                           signal.position_side,signal.signal_kind,
+                           signal.source_delta_quantity,signal.reference_price,
+                           extract(epoch FROM signal.occurred_at)*1000 AS occurred_at_ms
+                      FROM copytrading.leader_symbol_stop_signal_events AS stop_signal
+                      JOIN copytrading.signals AS signal USING(signal_id)
+                      LEFT JOIN latest_decision AS decision USING(signal_id)
+                      LEFT JOIN copytrading.submission_claims AS claim USING(signal_id)
+                      LEFT JOIN latest_submission AS submission USING(signal_id)
+                      LEFT JOIN attributed USING(signal_id)
+                     WHERE stop_signal.stop_event_id=%s
+                       AND (
+                         decision.state IS NULL OR decision.state IN (
+                           'RECEIVED','APPROVED','SUBMITTED','UNCERTAIN'
+                         ) OR (
+                           claim.signal_id IS NOT NULL
+                           AND attributed.signal_id IS NULL
+                           AND submission.state IN (
+                             'SUBMITTING','ACKNOWLEDGED','PARTIALLY_FILLED',
+                             'UNKNOWN'
+                           )
+                         )
+                       )
+                     ORDER BY signal.occurred_at,signal.signal_id
+                    """,
+                    (stop_event_id,),
+                )
+                rows = list(cursor.fetchall())
+        except psycopg.Error as error:
+            raise CopyRepositoryError(
+                "COPY_LEADER_SYMBOL_STOP_SIGNAL_READ_FAILED"
+            ) from error
+        return tuple(
+            NormalizedSignal(
+                signal_id=str(row["signal_id"]),
+                source_event_key=str(row["signal_id"]),
+                source_identity_key=str(row["signal_id"]),
+                lead_portfolio_id=str(row["lead_portfolio_id"]),
+                symbol=str(row["symbol"]),
+                position_side=PositionSide(str(row["position_side"])),
+                kind=SignalKind(str(row["signal_kind"])),
+                source_delta_quantity=Decimal(str(row["source_delta_quantity"])),
+                source_cumulative_quantity=Decimal(str(row["source_delta_quantity"])),
+                reference_price=Decimal(str(row["reference_price"])),
+                occurred_at_ms=int(row["occurred_at_ms"]),
+            )
+            for row in rows
+        )
+
     def ingest_orders(
         self,
         lead_portfolio_id: str,
@@ -2764,6 +3269,10 @@ class CopyTradingRepository:
                            claim.requested_quantity,claim.leverage,
                            pnl.fill_price,pnl.resulting_average_entry_price,
                            pnl.realized_pnl_delta_usdt,
+                           risk_stop.stop_event_id AS leader_symbol_stop_event_id,
+                           risk_stop.net_position_pnl_usdt AS stop_net_position_pnl_usdt,
+                           risk_stop.loss_limit_usdt AS stop_loss_limit_usdt,
+                           risk_stop.blocked_until AS stop_blocked_until,
                            source.total_pnl-coalesce(prior.total_pnl,0)
                              AS leader_realized_pnl_delta
                       FROM copytrading.signals AS persisted_signal
@@ -2771,6 +3280,10 @@ class CopyTradingRepository:
                       LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade
                         USING(signal_id)
                       LEFT JOIN copytrading.leader_pnl_events AS pnl USING(signal_id)
+                      LEFT JOIN copytrading.leader_symbol_stop_signal_events AS risk_link
+                        USING(signal_id)
+                      LEFT JOIN copytrading.leader_symbol_stop_events AS risk_stop
+                        USING(stop_event_id)
                       LEFT JOIN copytrading.source_fill_delta_events AS delta
                         ON delta.delta_event_id=persisted_signal.delta_event_id
                       LEFT JOIN copytrading.source_order_events AS source
@@ -2853,6 +3366,19 @@ class CopyTradingRepository:
                         if claim_row["realized_pnl_delta_usdt"] is None
                         else str(claim_row["realized_pnl_delta_usdt"])
                     )
+                    if claim_row["leader_symbol_stop_event_id"] is not None:
+                        notification_payload["leader_symbol_stop_event_id"] = str(
+                            claim_row["leader_symbol_stop_event_id"]
+                        )
+                        notification_payload["stop_net_position_pnl_usdt"] = str(
+                            claim_row["stop_net_position_pnl_usdt"]
+                        )
+                        notification_payload["stop_loss_limit_usdt"] = str(
+                            claim_row["stop_loss_limit_usdt"]
+                        )
+                        notification_payload["stop_blocked_until"] = claim_row[
+                            "stop_blocked_until"
+                        ].isoformat()
                     if signal.kind is SignalKind.INCREASE and claim_row["leverage"]:
                         margin_quantity = local_quantity
                         margin_price = (
@@ -2897,7 +3423,7 @@ class CopyTradingRepository:
         total_maintenance_margin_usdt: Decimal,
         position_marks: tuple[AccountPositionMark, ...] = (),
         observed_at: datetime,
-    ) -> None:
+    ) -> str:
         _require_utc(observed_at)
         nonnegative = (
             exchange_wallet_balance_usdt,
@@ -3154,6 +3680,7 @@ class CopyTradingRepository:
                     )
         except psycopg.Error as error:
             raise CopyRepositoryError("COPY_ACCOUNT_VALUATION_WRITE_FAILED") from error
+        return event_id
 
     def record_virtual_position(
         self,

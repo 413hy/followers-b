@@ -44,6 +44,7 @@ from ai_quant.copy_trading.repository import (
     AccountPositionMark,
     CopyTradingRepository,
     LeaderAssignment,
+    LeaderSymbolStop,
     RuntimeControl,
 )
 from ai_quant.copy_trading.risk import (
@@ -123,6 +124,8 @@ class CopyTradingRuntime:
         self._incident_callback = incident_callback
         self._exchange_info: dict[str, Any] | None = None
         self._cycle_account: CopyAccountSnapshot | None = None
+        self._cycle_position_marks: tuple[AccountPositionMark, ...] = ()
+        self._cycle_valuation_event_id: str | None = None
         # Recovery is tracked per leader. A successful leader must not be held back by
         # another leader whose public history remains unavailable.
         self._recover_all_on_next_cycle = recover_on_startup
@@ -139,6 +142,7 @@ class CopyTradingRuntime:
         # carrying stale tick/step/notional rules into a later leader operation.
         self._exchange_info = None
         assignments = self._repository.active_assignments()
+        by_leader = {item.lead_portfolio_id: item for item in assignments}
         if self._recover_all_on_next_cycle:
             self._recovery_pending_leaders.update(
                 assignment.lead_portfolio_id
@@ -147,9 +151,68 @@ class CopyTradingRuntime:
             )
             self._recover_all_on_next_cycle = False
         self._cycle_account = None
+        self._cycle_position_marks = ()
+        self._cycle_valuation_event_id = None
+        active_stops: tuple[LeaderSymbolStop, ...] = ()
+        valuation_event_id: str | None = None
         if self._execution_enabled:
             self._logical_account_snapshot(self._clock())
-        by_leader = {item.lead_portfolio_id: item for item in assignments}
+            valuation_event_id = self._cycle_valuation_event_id
+            if valuation_event_id is None:
+                raise RuntimeError("COPY_ACCOUNT_VALUATION_EVENT_MISSING")
+            active_stops = self._repository.enforce_leader_symbol_stops(
+                valuation_event_id=valuation_event_id,
+                position_marks=self._cycle_position_marks,
+                occurred_at=self._clock(),
+            )
+        preprocessed_signal_ids: set[str] = set()
+        stop_assignments: dict[str, LeaderAssignment] = {}
+        for stop in active_stops:
+            assignment = by_leader.get(stop.lead_portfolio_id)
+            if assignment is None:
+                assignment = LeaderAssignment(
+                    lead_portfolio_id=stop.lead_portfolio_id,
+                    nickname=stop.leader_nickname,
+                    lifecycle=LeaderLifecycle.DRAINING,
+                    source_aum_usdt=Decimal("1"),
+                    portfolio_weight=Decimal("0"),
+                    follow_multiplier=1,
+                )
+            stop_assignments[stop.stop_event_id] = assignment
+            preprocessed_signal_ids.update(
+                self._cancel_stopped_leader_symbol_entries(stop, assignment=assignment)
+            )
+        if active_stops:
+            if valuation_event_id is None:
+                raise RuntimeError("COPY_ACCOUNT_VALUATION_EVENT_MISSING")
+            # A cancellation can discover that a protected entry filled during
+            # the exchange race window. Re-read the newly attributed virtual
+            # position now so its stop-close signal is created in this cycle.
+            active_stops = self._repository.enforce_leader_symbol_stops(
+                valuation_event_id=valuation_event_id,
+                position_marks=self._cycle_position_marks,
+                occurred_at=self._clock(),
+            )
+        for stop in active_stops:
+            assignment = stop_assignments.get(stop.stop_event_id)
+            if assignment is None:
+                assignment = by_leader.get(stop.lead_portfolio_id)
+            if assignment is None:
+                assignment = LeaderAssignment(
+                    lead_portfolio_id=stop.lead_portfolio_id,
+                    nickname=stop.leader_nickname,
+                    lifecycle=LeaderLifecycle.DRAINING,
+                    source_aum_usdt=Decimal("1"),
+                    portfolio_weight=Decimal("0"),
+                    follow_multiplier=1,
+                )
+            for signal in self._repository.recoverable_leader_symbol_stop_signals(
+                stop.stop_event_id
+            ):
+                if signal.signal_id in preprocessed_signal_ids:
+                    continue
+                self._process_signal(signal, assignment)
+                preprocessed_signal_ids.add(signal.signal_id)
         control = self._repository.latest_runtime_control()
         if (
             self._execution_enabled
@@ -161,8 +224,10 @@ class CopyTradingRuntime:
                 occurred_at=self._clock(),
             )
         recovered = self._repository.recoverable_signals()
-        processed = 0
+        processed = len(preprocessed_signal_ids)
         for signal in recovered:
+            if signal.signal_id in preprocessed_signal_ids:
+                continue
             assignment = by_leader.get(signal.lead_portfolio_id)
             if assignment is None:
                 # A durable order claim can outlive leader assignment. Route every orphaned
@@ -374,7 +439,22 @@ class CopyTradingRuntime:
             blocked_state: str | None = None
             blocked_reason: str | None = None
             cancellation_reason: str | None = None
-            if self._execution_enabled and control.state is not RuntimeControlState.RUNNING:
+            leader_symbol_stop = (
+                self._repository.active_leader_symbol_stop(
+                    lead_portfolio_id=signal.lead_portfolio_id,
+                    symbol=signal.symbol,
+                    occurred_at=now,
+                )
+                if self._execution_enabled
+                else None
+            )
+            if leader_symbol_stop is not None:
+                blocked_state = "RISK_REJECTED"
+                blocked_reason = "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_ACTIVE"
+                cancellation_reason = (
+                    "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP"
+                )
+            elif self._execution_enabled and control.state is not RuntimeControlState.RUNNING:
                 blocked_state = "RISK_REJECTED"
                 blocked_reason = f"COPY_NEW_ENTRIES_{control.state.value}"
                 cancellation_reason = "COPY_PROTECTED_LIMIT_CANCELLED_BY_CONTROL"
@@ -729,6 +809,7 @@ class CopyTradingRuntime:
                 "COPY_PROTECTED_LIMIT_CANCELLED_BY_SOURCE_REDUCTION",
                 "COPY_PROTECTED_LIMIT_CANCELLED_BY_CONTROL",
                 "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_DRAINING",
+                "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP",
                 "COPY_PROTECTED_LIMIT_CANCELLED_EXTERNALLY",
             }
             for code in receipt.reason_codes
@@ -812,6 +893,7 @@ class CopyTradingRuntime:
                 "COPY_PROTECTED_LIMIT_EXPIRED",
                 "COPY_PROTECTED_LIMIT_CANCELLED_BY_CONTROL",
                 "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_DRAINING",
+                "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP",
                 "COPY_PROTECTED_LIMIT_CANCELLED_EXTERNALLY",
             }
             for code in receipt.reason_codes
@@ -831,6 +913,37 @@ class CopyTradingRuntime:
             receipt.reason_codes,
             occurred_at,
         )
+
+    def _cancel_stopped_leader_symbol_entries(
+        self,
+        stop: LeaderSymbolStop,
+        *,
+        assignment: LeaderAssignment,
+    ) -> set[str]:
+        """Cancel only entries owned by the stopped leader/symbol.
+
+        One bounded page per hedge side is enough for a normal cycle. Remaining
+        pages stay durable and are retried on the next cycle instead of spinning
+        repeatedly on an exchange cancellation whose result is still uncertain.
+        """
+
+        processed: set[str] = set()
+        for position_side in PositionSide:
+            pending = self._repository.pending_increase_signals(
+                lead_portfolio_id=stop.lead_portfolio_id,
+                symbol=stop.symbol,
+                position_side=position_side,
+                limit=100,
+            )
+            for signal in pending:
+                self._process_signal(signal, assignment)
+                processed.add(signal.signal_id)
+            if len(pending) >= 100:
+                self._request_incident(
+                    "leader-symbol-stop-pending-backlog:"
+                    f"{stop.lead_portfolio_id}:{stop.symbol}:{position_side.value}"
+                )
+        return processed
 
     def _cancel_superseded_entries(
         self,
@@ -973,7 +1086,8 @@ class CopyTradingRuntime:
             total_initial_margin_usdt=raw.total_initial_margin_usdt,
             total_maintenance_margin_usdt=raw.total_maintenance_margin_usdt,
         )
-        self._repository.record_account_valuation(
+        self._cycle_position_marks = _account_position_marks(account_v2)
+        self._cycle_valuation_event_id = self._repository.record_account_valuation(
             exchange_wallet_balance_usdt=raw.wallet_balance_usdt,
             exchange_margin_balance_usdt=raw.margin_balance_usdt,
             exchange_available_balance_usdt=raw.available_balance_usdt,
@@ -981,7 +1095,7 @@ class CopyTradingRuntime:
             operating_envelope_usdt=self._allocation_policy.operating_envelope_usdt,
             total_initial_margin_usdt=raw.total_initial_margin_usdt,
             total_maintenance_margin_usdt=raw.total_maintenance_margin_usdt,
-            position_marks=_account_position_marks(account_v2),
+            position_marks=self._cycle_position_marks,
             observed_at=now,
         )
         self._cycle_account = logical

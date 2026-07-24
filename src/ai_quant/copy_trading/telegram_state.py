@@ -4002,6 +4002,47 @@ def _notification_text_raw(
             "已有仓位仍会占用保证金额度\n"
             f"生效时间: {_display_shanghai_time(payload.get('occurred_at'))}"
         )
+    if payload.get("event") == "copy_leader_symbol_stop_triggered":
+        leader_id = _safe_text(str(payload.get("lead_portfolio_id", "UNKNOWN")), 24)
+        nickname = _safe_text(str(payload.get("leader_nickname", "名称未知")), 32)
+        symbol = _safe_text(str(payload.get("symbol", "UNKNOWN")), 24)
+        try:
+            net_pnl = signed_money(payload.get("net_position_pnl_usdt", "0"))
+            limit = compact_money(payload.get("loss_limit_usdt", "10"))
+        except ValueError:
+            net_pnl = _safe_text(str(payload.get("net_position_pnl_usdt", "未知")), 40)
+            limit = _safe_text(str(payload.get("loss_limit_usdt", "10")), 40)
+        side_parts: list[str] = []
+        breakdown = payload.get("position_pnl_breakdown")
+        if isinstance(breakdown, list):
+            for item in breakdown[:2]:
+                if not isinstance(item, Mapping):
+                    continue
+                side = {"LONG": "多", "SHORT": "空"}.get(
+                    str(item.get("position_side")),
+                    _safe_text(str(item.get("position_side", "未知")), 8),
+                )
+                try:
+                    side_pnl = signed_money(item.get("total_pnl_usdt", "0"))
+                except ValueError:
+                    side_pnl = _safe_text(str(item.get("total_pnl_usdt", "未知")), 40)
+                side_parts.append(f"{side} {side_pnl} U")
+        side_text = f" ({' | '.join(side_parts)})" if side_parts else ""
+        return (
+            "🛡️ 带单员单币种止损已触发\n"
+            f"带单员: {nickname} (ID {leader_id})\n"
+            f"币种: {symbol}\n"
+            f"双向合计盈亏: {net_pnl} U{side_text}\n"
+            f"止损上限: -{limit} U\n"
+            "系统处理: 已撤销该带单员在此币种的待入场订单, "
+            "并为其多仓和空仓分别提交市价平仓; "
+            "其他带单员、其他币种均不受影响\n"
+            "风控范围: 仅跳过该带单员在此币种的新开仓/加仓, "
+            "减仓和平仓仍允许\n"
+            f"恢复时间: {_display_shanghai_time(payload.get('blocked_until'))} "
+            "(48小时后自动恢复)\n"
+            f"触发时间: {_display_shanghai_time(payload.get('occurred_at'))}"
+        )
     if payload.get("event") == "copy_system":
         raw_state = str(payload.get("state", "UNKNOWN"))
         summary = _safe_text(str(payload.get("summary", "")), 800)
@@ -4177,6 +4218,7 @@ def _notification_text_raw(
         else ()
     )
     reasons = _signal_reason_text(reason_codes)
+    leader_symbol_stop_signal = payload.get("leader_symbol_stop_event_id") is not None
     icon = {
         "RECEIVED": "🔄",
         "APPROVED": "⏳",
@@ -4191,7 +4233,9 @@ def _notification_text_raw(
         "FAILED": "❌",
         "UNCERTAIN": "🚨",
     }.get(state, "i")
-    if state == "SUBMITTED":
+    if state == "SUBMITTED" and leader_symbol_stop_signal:
+        title = "🛡️ 单币种止损平仓已提交"
+    elif state == "SUBMITTED":
         title = "📡 交易信号"
     elif state == "RECEIVED":
         title = "🔄 交易信号等待处理"
@@ -4199,6 +4243,8 @@ def _notification_text_raw(
         title = "⏳ 交易信号准备提交"
     elif state == "FILLED" and kind == "INCREASE":
         title = "✅ 跟单入场成功"
+    elif state == "FILLED" and kind == "REDUCE" and leader_symbol_stop_signal:
+        title = "✅ 单币种止损平仓成功"
     elif state == "FILLED" and kind == "REDUCE":
         title = "✅ 跟单减仓/平仓成功"
     elif state == "RISK_REJECTED" and any(
@@ -4236,6 +4282,18 @@ def _notification_text_raw(
     if state != "IGNORED_ORPHAN":
         lines[-1] = f"{lines[-1]} | 数量 {quantity}"
     lines.append(f"带单员: {nickname} (ID {leader})")
+    if leader_symbol_stop_signal:
+        try:
+            stop_net_pnl = signed_money(payload.get("stop_net_position_pnl_usdt", "0"))
+            stop_limit = compact_money(payload.get("stop_loss_limit_usdt", "10"))
+        except ValueError:
+            stop_net_pnl = "未知"
+            stop_limit = "10"
+        lines.append(
+            f"风控: 双向合计 {stop_net_pnl} U 触及 -{stop_limit} U; "
+            f"仅平该带单员此币种, 冷却至 "
+            f"{_display_shanghai_time(payload.get('stop_blocked_until'))}"
+        )
     if state == "IGNORED_ORPHAN":
         try:
             source_quantity = compact_decimal(payload.get("source_quantity", "0"))
@@ -4396,6 +4454,8 @@ def _notification_contextual_view(payload: Mapping[str, Any]) -> str | None:
     # Editing either through an inline callback makes the original event disappear.
     if payload.get("event") == "copy_pnl_reset":
         return None
+    if payload.get("event") == "copy_leader_symbol_stop_triggered":
+        return "positions"
     if payload.get("event") == "copy_signal_decision" and payload.get("state") in {
         "SUBMITTED",
         "FILLED",
@@ -4426,6 +4486,7 @@ def _notification_contextual_view(payload: Mapping[str, Any]) -> str | None:
         "copy_leader_follow_multiplier_change": "leaders",
         "copy_entry_margin_limit_change": "funds",
         "copy_leader_lock_change": "leaders",
+        "copy_leader_symbol_stop_triggered": "positions",
         "copy_health": "health",
         "copy_runtime_control": "control",
         "copy_system": "status",
