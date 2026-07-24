@@ -154,6 +154,8 @@ class FakeJournal:
 
     def record(self, event: SubmissionEvent) -> None:
         self.events.append(event)
+        if event.state == "SUBMITTING" and self.existing is not None:
+            self.existing = replace(self.existing, claimed_at=event.occurred_at)
 
 
 class FakeClient:
@@ -494,7 +496,7 @@ def test_exchange_native_gtd_expiry_is_classified_as_cancellation() -> None:
     assert client.cancelled == []
 
 
-def test_cancelled_entry_missing_at_exchange_remains_uncertain() -> None:
+def test_cancelled_entry_confirmed_absent_finishes_without_false_failure() -> None:
     client = FakeClient()
     journal = FakeJournal()
     order = _protected_order()
@@ -528,9 +530,12 @@ def test_cancelled_entry_missing_at_exchange_remains_uncertain() -> None:
         clock=lambda: NOW + timedelta(minutes=2),
     ).cancel_pending_increase(order.signal)
 
-    assert receipt.state is CopyExecutionState.UNKNOWN
-    assert receipt.reason_codes == ("COPY_PROTECTED_LIMIT_CANCEL_STATUS_UNKNOWN",)
-    assert journal.events[-1].state == "UNKNOWN"
+    assert receipt.state is CopyExecutionState.REJECTED
+    assert receipt.reason_codes == (
+        "COPY_PROTECTED_LIMIT_CANCELLED_BY_SOURCE_REDUCTION",
+        "COPY_SUBMISSION_CONFIRMED_ABSENT",
+    )
+    assert journal.events[-1].state == "REJECTED"
 
 
 def test_source_reduction_cancels_pending_entry_before_it_can_fill() -> None:
@@ -570,6 +575,51 @@ def test_duplicate_persistent_claim_reconciles_without_resubmission() -> None:
     assert receipt.state is CopyExecutionState.RECONCILED
     assert client.placed == []
     assert len(client.queried) == 1
+
+
+def test_persistent_gtc_entry_stays_pending_for_days_without_expiring_or_resubmitting() -> None:
+    client = FakeClient()
+    journal = FakeJournal()
+    order = _persistent_protected_order()
+
+    def pending(params: dict[str, str]) -> dict[str, Any]:
+        client.placed.append(params)
+        return {
+            "clientOrderId": params["newClientOrderId"],
+            "orderId": 126,
+            "status": "NEW",
+            "executedQty": "0",
+            "avgPrice": "0",
+        }
+
+    def still_pending(symbol: str, client_order_id: str) -> dict[str, Any]:
+        client.queried.append((symbol, client_order_id))
+        return {
+            "clientOrderId": client_order_id,
+            "orderId": 126,
+            "status": "NEW",
+            "executedQty": "0",
+            "avgPrice": "0",
+        }
+
+    client.place_order = pending  # type: ignore[method-assign]
+    client.query_order = still_pending  # type: ignore[method-assign]
+    first = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW,
+    ).execute(order, risk_decision=_risk())
+    after_seven_days = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW + timedelta(days=7),
+    ).execute(order, risk_decision=_risk())
+
+    assert first.state is CopyExecutionState.ACKNOWLEDGED
+    assert after_seven_days.state is CopyExecutionState.ACKNOWLEDGED
+    assert len(client.placed) == 1
+    assert len(client.queried) == 1
+    assert client.cancelled == []
 
 
 def test_restart_reconciles_with_original_persisted_quantity() -> None:
@@ -815,10 +865,10 @@ def test_tradifi_agreement_rejection_is_an_explicit_account_prerequisite() -> No
     assert journal.events[-1].state == "REJECTED"
 
 
-def test_missing_claimed_order_after_grace_becomes_terminal_rejection() -> None:
+def test_missing_persistent_entry_is_resubmitted_with_same_exact_order() -> None:
     client = FakeClient()
     journal = FakeJournal()
-    order = _protected_order()
+    order = _persistent_protected_order()
     initial = HedgeTestnetMarketExecutor(
         client=client,
         journal=journal,
@@ -837,10 +887,61 @@ def test_missing_claimed_order_after_grace_becomes_terminal_rejection() -> None:
         clock=lambda: NOW + timedelta(minutes=2),
     ).execute(order, risk_decision=_risk())
 
-    assert receipt.state is CopyExecutionState.REJECTED
-    assert receipt.reason_codes == ("COPY_SUBMISSION_NOT_FOUND_AFTER_GRACE",)
-    assert len(client.placed) == 1
-    assert journal.events[-1].state == "REJECTED"
+    assert receipt.state is CopyExecutionState.FILLED
+    assert receipt.reason_codes == (
+        "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",
+    )
+    assert len(client.placed) == 2
+    assert client.placed[0] == client.placed[1]
+    assert journal.events[-2].state == "SUBMITTING"
+    assert journal.events[-2].reason_codes == (
+        "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",
+    )
+    assert journal.events[-1].state == "FILLED"
+
+
+def test_uncertain_persistent_resubmission_waits_before_trying_again() -> None:
+    client = FakeClient()
+    journal = FakeJournal()
+    order = _persistent_protected_order()
+
+    def uncertain_place(params: dict[str, str]) -> dict[str, Any]:
+        client.placed.append(params)
+        raise ProbeError("PLACE_ORDER_TRANSPORT_FAILED")
+
+    def missing_order(symbol: str, client_order_id: str) -> dict[str, Any]:
+        client.queried.append((symbol, client_order_id))
+        raise ProbeError("QUERY_ORDER_HTTP_400_CODE_-2013")
+
+    client.place_order = uncertain_place  # type: ignore[method-assign]
+    client.query_order = missing_order  # type: ignore[method-assign]
+    HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW,
+    ).execute(order, risk_decision=_risk())
+
+    second = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW + timedelta(minutes=2),
+    ).execute(order, risk_decision=_risk())
+    third = HedgeTestnetMarketExecutor(
+        client=client,
+        journal=journal,
+        clock=lambda: NOW + timedelta(minutes=2, seconds=10),
+    ).execute(order, risk_decision=_risk())
+
+    assert second.state is CopyExecutionState.UNKNOWN
+    assert third.state is CopyExecutionState.UNKNOWN
+    assert second.reason_codes == (
+        "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",
+        "COPY_SUBMISSION_STATUS_UNKNOWN",
+    )
+    assert len(client.placed) == 2
+    assert client.placed[0] == client.placed[1]
+    assert journal.existing is not None
+    assert journal.existing.claimed_at == NOW + timedelta(minutes=2)
 
 
 def test_durable_claim_restores_result_response_mode() -> None:

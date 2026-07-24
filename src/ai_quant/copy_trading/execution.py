@@ -198,7 +198,12 @@ class HedgeTestnetClient(Protocol):
 
 
 class HedgeTestnetMarketExecutor:
-    """Submit at most one deterministic protected order for each persisted signal claim."""
+    """Maintain one deterministic exchange-order identity for each persisted signal claim."""
+
+    # This is only an eventual-consistency safety interval before the exact same
+    # idempotent request may be sent again. It is not an order lifetime: a
+    # persistent GTC entry remains recoverable until the source position exits.
+    _ABSENCE_CONFIRMATION_DELAY = timedelta(minutes=2)
 
     def __init__(
         self,
@@ -356,6 +361,7 @@ class HedgeTestnetMarketExecutor:
             order,
             client_order_id,
             reason_code=reason_code,
+            claimed_at=claim.claimed_at,
         )
 
     def _reconcile_claim(
@@ -415,6 +421,12 @@ class HedgeTestnetMarketExecutor:
                 error=error,
                 claimed_at=claimed_at,
             ):
+                if (
+                    order.signal.kind is SignalKind.INCREASE
+                    and order.order_type is CopyOrderType.LIMIT
+                    and order.expires_at is None
+                ):
+                    return self._resubmit_persistent_entry(order, client_order_id)
                 receipt = _rejected_receipt(
                     order,
                     client_order_id,
@@ -444,6 +456,7 @@ class HedgeTestnetMarketExecutor:
                 order,
                 client_order_id,
                 reason_code="COPY_PROTECTED_LIMIT_EXPIRED",
+                claimed_at=claimed_at,
             )
         return self._receipt_with_immediate_fill_price(
             order,
@@ -465,7 +478,7 @@ class HedgeTestnetMarketExecutor:
         now = self._clock()
         _require_utc(now)
         _require_utc(claimed_at)
-        if now < claimed_at or now - claimed_at < timedelta(minutes=2):
+        if now < claimed_at or now - claimed_at < self._ABSENCE_CONFIRMATION_DELAY:
             return False
         try:
             open_orders = self._client.open_orders(order.signal.symbol)
@@ -483,13 +496,33 @@ class HedgeTestnetMarketExecutor:
         client_order_id: str,
         *,
         reason_code: str,
+        claimed_at: datetime | None = None,
     ) -> CopyExecutionReceipt:
         try:
             response = self._client.cancel_order(order.signal.symbol, client_order_id)
         except TestnetProbeError:
             try:
                 response = self._client.query_order(order.signal.symbol, client_order_id)
-            except TestnetProbeError:
+            except TestnetProbeError as query_error:
+                if self._submission_definitively_absent(
+                    order,
+                    client_order_id,
+                    error=query_error,
+                    claimed_at=claimed_at,
+                ):
+                    receipt = _rejected_receipt(
+                        order,
+                        client_order_id,
+                        reason_code,
+                        "COPY_SUBMISSION_CONFIRMED_ABSENT",
+                    )
+                    self._record(
+                        order.signal.signal_id,
+                        state="REJECTED",
+                        occurred_at=self._clock(),
+                        reason_codes=receipt.reason_codes,
+                    )
+                    return receipt
                 receipt = _unknown_receipt(
                     order,
                     client_order_id,
@@ -510,10 +543,59 @@ class HedgeTestnetMarketExecutor:
             additional_reason_codes=(reason_code,),
         )
 
+    def _resubmit_persistent_entry(
+        self,
+        order: CopyMarketOrder,
+        client_order_id: str,
+    ) -> CopyExecutionReceipt:
+        """Retry a proven-absent GTC entry with the same immutable idempotency key."""
+
+        now = self._clock()
+        _require_utc(now)
+        retry_reason = "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE"
+        self._record(
+            order.signal.signal_id,
+            state="SUBMITTING",
+            occurred_at=now,
+            reason_codes=(retry_reason,),
+        )
+        self._client.change_initial_leverage(order.signal.symbol, order.leverage)
+        try:
+            response = self._client.place_order(_order_parameters(order, client_order_id))
+        except TestnetProbeError as error:
+            rejection_reasons = _definitive_place_rejection_reasons(error)
+            if rejection_reasons:
+                receipt = _rejected_receipt(
+                    order,
+                    client_order_id,
+                    *rejection_reasons,
+                )
+                self._record(
+                    order.signal.signal_id,
+                    state="REJECTED",
+                    occurred_at=self._clock(),
+                    reason_codes=receipt.reason_codes,
+                )
+                return receipt
+            return self._reconcile_after_uncertain_submit(
+                order,
+                client_order_id,
+                additional_reason_codes=(retry_reason,),
+            )
+        return self._receipt_with_immediate_fill_price(
+            order,
+            client_order_id,
+            response,
+            reconciled=False,
+            additional_reason_codes=(retry_reason,),
+        )
+
     def _reconcile_after_uncertain_submit(
         self,
         order: CopyMarketOrder,
         client_order_id: str,
+        *,
+        additional_reason_codes: tuple[str, ...] = (),
     ) -> CopyExecutionReceipt:
         try:
             response = self._client.query_order(order.signal.symbol, client_order_id)
@@ -521,6 +603,7 @@ class HedgeTestnetMarketExecutor:
             receipt = _unknown_receipt(
                 order,
                 client_order_id,
+                *additional_reason_codes,
                 "COPY_SUBMISSION_STATUS_UNKNOWN",
             )
             self._record(
@@ -535,6 +618,7 @@ class HedgeTestnetMarketExecutor:
             client_order_id,
             response,
             reconciled=True,
+            additional_reason_codes=additional_reason_codes,
         )
 
     def _receipt_with_immediate_fill_price(

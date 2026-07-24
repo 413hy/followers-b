@@ -14,7 +14,8 @@ _LABELS = {
         "交易资金净值已恢复到初始操作额度, 此后的盈亏和开仓容量从新基线计算"
     ),
     "COPY_PROTECTED_LIMIT_CANCELLED_BY_SOURCE_REDUCTION": (
-        "带单员在本系统入场前已减仓或平仓, 未成交的入场限价单已安全取消, 本次不会建立仓位"
+        "带单员已完全平掉该币种该方向的源仓, "
+        "未成交的入场限价单已安全取消, 本次不会建立仓位"
     ),
     "COPY_PROTECTED_LIMIT_CANCELLED_BY_CONTROL": (
         "系统已暂停新开仓或正在清仓, 未成交的入场限价单已安全取消"
@@ -70,7 +71,19 @@ _LABELS = {
     "COPY_SUBMISSION_ALREADY_CLAIMED_UNRESOLVED": "订单已提交过, 当前正在核对交易所状态",
     "COPY_SUBMISSION_CLAIM_RACE_UNRESOLVED": "订单提交记录发生并发冲突, 系统已停止重复下单",
     "COPY_SUBMISSION_CLAIM_PARAMETERS_INVALID": "持久化订单参数不完整, 系统已停止继续执行",
-    "COPY_SUBMISSION_NOT_FOUND_AFTER_GRACE": "宽限期后仍未在交易所找到这笔订单",
+    "COPY_SUBMISSION_NOT_FOUND_AFTER_GRACE": (
+        "旧版本在确认交易所未生成订单后错误终结了信号; 新版本已改为源仓仍在时安全重提"
+    ),
+    "COPY_SUBMISSION_CONFIRMED_ABSENT": (
+        "已通过订单查询和当前挂单复核确认交易所没有生成这张委托"
+    ),
+    "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE": (
+        "已确认原入场委托未在交易所生成; 源仓仍在, "
+        "系统已按原客户端订单号、原数量和原限价重新提交"
+    ),
+    "COPY_PERSISTENT_ENTRY_CANCELLED_AFTER_SOURCE_EXIT": (
+        "原入场委托未在交易所生成, 且带单员现已平掉对应仓位; 系统不会再补开"
+    ),
     "PLACE_ORDER_TRANSPORT_FAILED": "向 Binance 提交订单时网络连接失败, 订单结果需要核对",
     "PLACE_ORDER_HTTP_408_CODE_-1007": (
         "Binance 测试盘下单后端等待超时, 本次请求可能成功也可能未生成订单; "

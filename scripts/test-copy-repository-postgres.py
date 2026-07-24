@@ -452,6 +452,24 @@ def main() -> int:
     assert claims.count(True) == 1
     assert claims.count(False) == 7
     assert journal.lookup(signal_id=signal_id) is not None
+    retry_at = NOW + timedelta(minutes=2)
+    journal.record(
+        SubmissionEvent(
+            event_id=hashlib.sha256(f"retry-submitting:{signal_id}".encode()).hexdigest(),
+            signal_id=signal_id,
+            state="SUBMITTING",
+            filled_quantity=Decimal("0"),
+            exchange_order_id=None,
+            response_hash=None,
+            reason_codes=(
+                "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",
+            ),
+            occurred_at=retry_at,
+        )
+    )
+    retried_claim = journal.lookup(signal_id=signal_id)
+    assert retried_claim is not None
+    assert retried_claim.claimed_at == retry_at
     assert _claim(journal, other_signals[0].signal_id) is True
 
     long_incumbent = LeaderSnapshot.from_api(

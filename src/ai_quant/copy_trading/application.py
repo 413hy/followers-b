@@ -718,7 +718,12 @@ class CopyTradingRuntime:
                 signal,
                 "SUBMITTED",
                 receipt.requested_quantity,
-                (),
+                (
+                    ("COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",)
+                    if "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE"
+                    in receipt.reason_codes
+                    else ()
+                ),
                 now,
             )
         outcome_at = max(self._clock(), now + timedelta(microseconds=1))

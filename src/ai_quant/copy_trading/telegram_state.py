@@ -4372,7 +4372,10 @@ def _notification_text_raw(
     system_action = _signal_system_action(state, kind=kind, reason_codes=reason_codes)
     if system_action:
         lines.append(f"系统处理: {system_action}")
-    if reasons and state not in {"SUBMITTED", "FILLED"}:
+    if reasons and (
+        state not in {"SUBMITTED", "FILLED"}
+        or "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE" in reason_codes
+    ):
         lines.append(f"原因: {reasons}")
     lines.append(_notification_time_line(payload))
     body = "\n".join(lines)
@@ -4490,8 +4493,9 @@ def _signal_system_action(
         return "本次跟单未完成, 已记录错误并触发自动排查"
     if state == "UNCERTAIN":
         return (
-            "Binance 测试盘本次没有返回明确成交结果; 系统仅核对原订单, "
-            "不会循环重试或把同一笔带单信号执行多次"
+            "Binance 测试盘本次没有返回明确成交结果; 系统只核对同一客户端订单号. "
+            "若确认订单未生成且带单员仓位仍在, 将按原数量、杠杆和限价安全补交; "
+            "带单员平仓后则取消, 不会创建并行重复订单"
         )
     return ""
 

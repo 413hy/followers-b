@@ -42,7 +42,15 @@ class PostgresSubmissionJournal:
                            claim.order_type,claim.limit_price,
                            CASE WHEN upgrade.signal_id IS NULL
                                 THEN claim.expires_at ELSE NULL END AS expires_at,
-                           coalesce(upgrade.occurred_at,claim.claimed_at) AS claimed_at,
+                           greatest(
+                             coalesce(upgrade.occurred_at,claim.claimed_at),
+                             coalesce((
+                               SELECT max(event.occurred_at)
+                                 FROM copytrading.submission_events AS event
+                                WHERE event.signal_id=claim.signal_id
+                                  AND event.state='SUBMITTING'
+                             ),claim.claimed_at)
+                           ) AS claimed_at,
                            upgrade.signal_id IS NOT NULL AS policy_upgraded
                       FROM copytrading.submission_claims AS claim
                       LEFT JOIN copytrading.submission_policy_upgrade_events AS upgrade

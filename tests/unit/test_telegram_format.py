@@ -366,7 +366,7 @@ def test_source_reduction_cancellation_is_one_chinese_business_reason() -> None:
     text = _notification_text(payload)
 
     assert text.startswith("\n🕒 待入场订单已取消\nINJUSDT")
-    assert "带单员在本系统入场前已减仓或平仓" in text
+    assert "带单员已完全平掉该币种该方向的源仓" in text
     assert "交易所确认订单已撤销" not in text
     assert "COPY_" not in text
 
@@ -430,12 +430,24 @@ def test_orphan_close_is_information_not_a_zero_quantity_failed_order() -> None:
             "FAILED",
             "COPY_SUBMISSION_NOT_FOUND_AFTER_GRACE",
             "系统处理: 本次跟单未完成, 已记录错误并触发自动排查",
-            "原因: 宽限期后仍未在交易所找到这笔订单",
+            "原因: 旧版本在确认交易所未生成订单后错误终结了信号",
+        ),
+        (
+            "SUBMITTED",
+            "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",
+            "系统处理: 已按通知中的委托价格向 Binance 提交订单",
+            "原因: 已确认原入场委托未在交易所生成",
+        ),
+        (
+            "CANCELLED",
+            "COPY_PERSISTENT_ENTRY_CANCELLED_AFTER_SOURCE_EXIT",
+            "系统处理: 已撤销待入场订单, 本次不会建立仓位",
+            "原因: 原入场委托未在交易所生成, 且带单员现已平掉对应仓位",
         ),
         (
             "UNCERTAIN",
             "COPY_SUBMISSION_STATUS_UNKNOWN",
-            "不会循环重试或把同一笔带单信号执行多次",
+            "若确认订单未生成且带单员仓位仍在, 将按原数量、杠杆和限价安全补交",
             "原因: Binance 测试盘没有在本次下单请求中返回明确结果",
         ),
     ],

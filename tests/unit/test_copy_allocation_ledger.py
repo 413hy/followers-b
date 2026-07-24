@@ -580,6 +580,29 @@ def test_full_source_exit_closes_all_system_recorded_leader_quantity() -> None:
     assert plan.requested_local_quantity == Decimal("0.845")
 
 
+def test_same_leader_long_exit_does_not_change_its_short_position() -> None:
+    ledger = VirtualPositionLedger()
+    long_entry = _signal(side=PositionSide.LONG, source_quantity="1")
+    short_entry = _signal(side=PositionSide.SHORT, source_quantity="2")
+    ledger.record_increase_fill(long_entry, filled_local_quantity=Decimal("0.4"))
+    ledger.record_increase_fill(short_entry, filled_local_quantity=Decimal("0.7"))
+
+    long_exit = _signal(
+        side=PositionSide.LONG,
+        kind=SignalKind.REDUCE,
+        source_quantity="1",
+    )
+    plan = ledger.plan_reduction(
+        long_exit,
+        rules=_rules(),
+        source_position_quantity=Decimal("1"),
+    )
+    ledger.record_reduction_fill(plan, filled_local_quantity=plan.requested_local_quantity)
+
+    assert ledger.position_for(long_entry).local_quantity == 0
+    assert ledger.position_for(short_entry).local_quantity == Decimal("0.7")
+
+
 def test_orphan_reduction_is_recorded_as_non_executable() -> None:
     reduction = _signal(kind=SignalKind.REDUCE, source_quantity="5")
     plan = VirtualPositionLedger().plan_reduction(reduction, rules=_rules())

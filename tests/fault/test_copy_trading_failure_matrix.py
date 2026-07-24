@@ -1367,6 +1367,24 @@ def test_filled_entry_waiting_for_price_stays_submitted_without_attribution() ->
     )
 
 
+def test_confirmed_absent_persistent_entry_resubmission_is_reported_as_pending() -> None:
+    signal = _signal()
+    repository = FakeRepository(assignments=(_assignment(),), ingested=(signal,))
+    executor = FakeExecutor(
+        CopyExecutionState.ACKNOWLEDGED,
+        reason_codes=("COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",),
+    )
+
+    report = _runtime(repository, FakePublic(), executor).run_cycle()
+
+    assert report.processed_signal_count == 1
+    assert repository.virtual_records == []
+    assert repository.decisions[-1][1:] == (
+        "SUBMITTED",
+        ("COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE",),
+    )
+
+
 def test_filled_reduction_waiting_for_price_stays_submitted_without_pnl_attribution() -> None:
     class PendingFillPriceExecutor(FakeExecutor):
         def execute(self, order: Any, *, risk_decision: Any) -> CopyExecutionReceipt:

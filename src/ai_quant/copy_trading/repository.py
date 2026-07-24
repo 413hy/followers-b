@@ -3526,6 +3526,15 @@ class CopyTradingRepository:
                             )
                             notification_payload["order_margin_usdt"] = str(order_margin)
                 payload_hash = _digest(notification_payload)
+                notification_key = (
+                    f"copy-signal:{signal.signal_id}:persistent-entry-resubmitted:{event_id}"
+                    if (
+                        state == "SUBMITTED"
+                        and "COPY_PERSISTENT_ENTRY_RESUBMITTED_AFTER_CONFIRMED_ABSENCE"
+                        in reason_codes
+                    )
+                    else f"copy-signal:{signal.signal_id}:{state}"
+                )
                 cursor.execute(
                     """
                     INSERT INTO control.outbox(
@@ -3535,7 +3544,7 @@ class CopyTradingRepository:
                     """,
                     (
                         _digest({"notification": event_id}),
-                        f"copy-signal:{signal.signal_id}:{state}",
+                        notification_key,
                         Jsonb(notification_payload),
                         payload_hash,
                     ),
