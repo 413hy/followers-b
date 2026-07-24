@@ -4032,7 +4032,7 @@ def _notification_text_raw(
             "🛡️ 带单员单币种止损已触发\n"
             f"带单员: {nickname} (ID {leader_id})\n"
             f"币种: {symbol}\n"
-            f"双向合计盈亏: {net_pnl} U{side_text}\n"
+            f"现有仓位累计盈亏合计: {net_pnl} U{side_text}\n"
             f"止损上限: -{limit} U\n"
             "系统处理: 已撤销该带单员在此币种的待入场订单, "
             "并为其多仓和空仓分别提交市价平仓; "
@@ -4290,7 +4290,7 @@ def _notification_text_raw(
             stop_net_pnl = "未知"
             stop_limit = "10"
         lines.append(
-            f"风控: 双向合计 {stop_net_pnl} U 触及 -{stop_limit} U; "
+            f"风控: 现有仓位累计盈亏合计 {stop_net_pnl} U 触及 -{stop_limit} U; "
             f"仅平该带单员此币种, 冷却至 "
             f"{_display_shanghai_time(payload.get('stop_blocked_until'))}"
         )

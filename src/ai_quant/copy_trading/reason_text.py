@@ -102,7 +102,7 @@ _LABELS = {
     ),
     "COPY_LEADER_DRAINING_NO_NEW_ENTRY": "该带单员正在等待退出, 本次不再建立新仓位",
     "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED": (
-        "该带单员在这个币种的多仓与空仓合计盈亏已达到 -10 U止损线"
+        "该带单员在这个币种当前仍持有的多仓与空仓累计盈亏合计已达到 -10 U止损线"
     ),
     "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H": (
         "仅该带单员的这个币种进入48小时新开仓冷却, 其他带单员和币种不受影响"

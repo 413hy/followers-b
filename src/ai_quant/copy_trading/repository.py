@@ -1971,7 +1971,11 @@ class CopyTradingRepository:
     ) -> tuple[LeaderSymbolStop, ...]:
         """Activate and recover isolated leader/symbol stops from current position PnL.
 
-        PnL is netted across LONG and SHORT only inside the same leader and symbol.
+        Only position sides whose latest quantity remains positive participate.
+        Each side uses the same current-position cumulative PnL shown by Telegram:
+        realized partial reductions in that still-open position cycle plus current
+        unrealized PnL. A fully closed historical position is excluded. LONG and
+        SHORT are then netted only inside the same leader and symbol.
         Every active cooldown continuously derives close signals from the latest
         append-only virtual-position events, so a late entry fill or process restart
         cannot leave risk behind.

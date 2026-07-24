@@ -1054,7 +1054,7 @@ def main() -> int:
     assert any("已解锁" in item.text for item in notifications)
     assert any("本轮自动换人已取消" in item.text for item in notifications)
     assert any("交易资金净值已恢复为 150 U" in item.text for item in notifications)
-    assert any("双向合计盈亏: -15 U" in item.text for item in notifications)
+    assert any("现有仓位累计盈亏合计: -15 U" in item.text for item in notifications)
     assert any("其他带单员、其他币种均不受影响" in item.text for item in notifications)
     for notification in notifications:
         telegram.complete_notification(notification.message_id, delivered=True)

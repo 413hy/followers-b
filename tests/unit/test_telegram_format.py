@@ -135,7 +135,7 @@ def test_leader_symbol_stop_notification_explains_netting_isolation_and_cooldown
 
     text = _notification_text(payload)
 
-    assert "双向合计盈亏: -10.25 U (多 -15 U | 空 +4.75 U)" in text
+    assert "现有仓位累计盈亏合计: -10.25 U (多 -15 U | 空 +4.75 U)" in text
     assert "其他带单员、其他币种均不受影响" in text
     assert "减仓和平仓仍允许" in text
     assert "07-26 11:00:00 (48小时后自动恢复)" in text

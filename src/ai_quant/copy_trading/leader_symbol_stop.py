@@ -1,4 +1,4 @@
-"""Per-leader, per-symbol stop-loss policy for independently owned positions."""
+"""Per-leader/symbol stop policy using cumulative PnL of positions still open."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class LeaderSymbolPositionPnl:
 def aggregate_leader_symbol_pnl(
     positions: tuple[LeaderSymbolPositionPnl, ...],
 ) -> dict[tuple[str, str], Decimal]:
-    """Net both hedge sides without crossing leader or symbol ownership boundaries."""
+    """Net cumulative PnL of currently open hedge sides inside one ownership key."""
 
     totals: defaultdict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for position in positions:
