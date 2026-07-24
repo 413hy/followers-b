@@ -244,6 +244,15 @@ def main() -> int:
         )
         == ()
     )
+    repository.record_poll(
+        ambiguous_leader_id,
+        state="SUCCEEDED",
+        row_count=2,
+        maximum_update_time_ms=600,
+        reason_codes=("COPY_BASELINE_ORDER_IDENTITY_AMBIGUITY_FENCED",),
+        occurred_at=NOW + timedelta(milliseconds=500),
+    )
+    assert repository.source_watermark(ambiguous_leader_id) == 600
     resolved_baseline = ambiguous_baseline.resolve_position_side(
         position_side=SourcePositionSide.LONG,
     )

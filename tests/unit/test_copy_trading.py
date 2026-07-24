@@ -158,9 +158,7 @@ def test_public_candidate_page_can_isolate_malformed_unrelated_rows() -> None:
 
     page = client.list_leaders(skip_invalid_rows=True)
 
-    assert [leader.lead_portfolio_id for leader in page.leaders] == [
-        "5108371059752839168"
-    ]
+    assert [leader.lead_portfolio_id for leader in page.leaders] == ["5108371059752839168"]
     assert page.total == 2
     assert page.invalid_row_count == 1
     assert page.invalid_reason_codes == ("COPY_FIELD_NICKNAME_INVALID",)
@@ -626,6 +624,44 @@ def test_public_client_fails_closed_when_rows_have_ambiguous_derived_identity() 
 
     with pytest.raises(BinancePublicCopyError, match="IDENTITY_AMBIGUOUS"):
         client.order_history("5108371059752839168")
+
+
+def test_public_client_baseline_tolerates_only_identity_collisions_older_than_fence() -> None:
+    first = {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "positionSide": "LONG",
+        "executedQty": "1",
+        "avgPrice": "2000",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    second = {
+        **first,
+        "executedQty": "2",
+        "avgPrice": "2001",
+        "orderUpdateTime": 1_700_000_002_000,
+    }
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [first, second], "total": 2}
+        )
+    )
+
+    baseline = client.order_history_baseline(
+        "5108371059752839168",
+        identity_guard_after_ms=1_700_000_003_000,
+    )
+
+    assert len(baseline.orders) == 2
+    assert len({order.identity_key for order in baseline.orders}) == 1
+    with pytest.raises(BinancePublicCopyError, match="IDENTITY_AMBIGUOUS"):
+        client.order_history_baseline(
+            "5108371059752839168",
+            identity_guard_after_ms=1_700_000_001_000,
+        )
 
 
 def test_public_client_disambiguates_same_millisecond_limit_ladder_by_price() -> None:

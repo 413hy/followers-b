@@ -212,9 +212,18 @@ class LiveTelegramLeaderAdmin:
         # same-millisecond ladder orders, so a compact recent window avoids unrelated
         # historical identity collisions while preserving the fail-closed guard for
         # genuinely ambiguous new operations.
-        history = self._public.order_history(
-            leader.lead_portfolio_id,
-            page_size=100,
+        baseline_reader = getattr(self._public, "order_history_baseline", None)
+        history = (
+            baseline_reader(
+                leader.lead_portfolio_id,
+                identity_guard_after_ms=int(now.timestamp() * 1000),
+                page_size=100,
+            )
+            if callable(baseline_reader)
+            else self._public.order_history(
+                leader.lead_portfolio_id,
+                page_size=100,
+            )
         )
         orders = history.orders
         if any(order.position_side.value == "BOTH" for order in orders):

@@ -430,6 +430,18 @@ def test_manual_add_accepts_public_one_way_leader_after_direction_resolution() -
             assert page_size == 100
             return OrderHistoryPage(orders=orders, total=len(orders))
 
+        def order_history_baseline(
+            self,
+            lead_portfolio_id: str,
+            *,
+            identity_guard_after_ms: int,
+            page_size: int,
+        ) -> OrderHistoryPage:
+            assert identity_guard_after_ms == int(
+                datetime(2026, 7, 19, tzinfo=UTC).timestamp() * 1000
+            )
+            return self.order_history(lead_portfolio_id, page_size=page_size)
+
         def position_history(
             self,
             lead_portfolio_id: str,

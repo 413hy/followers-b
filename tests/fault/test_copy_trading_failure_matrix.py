@@ -277,6 +277,7 @@ class FakeRepository:
         self.decision_times: list[datetime] = []
         self.polls: list[tuple[str, str]] = []
         self.poll_reason_codes: list[tuple[str, ...]] = []
+        self.poll_maximum_update_times: list[int | None] = []
         self.ingest_baselines: list[bool] = []
         self.ingested_source_orders: list[tuple[PublicLeaderOrder, ...]] = []
         self.virtual_records: list[str] = []
@@ -385,6 +386,7 @@ class FakeRepository:
     def record_poll(self, leader_id: str, *, state: str, **kwargs: Any) -> None:
         self.polls.append((leader_id, state))
         self.poll_reason_codes.append(tuple(kwargs.get("reason_codes", ())))
+        self.poll_maximum_update_times.append(kwargs.get("maximum_update_time_ms"))
 
     def append_lifecycle(self, *args: Any, **kwargs: Any) -> None:
         raise AssertionError("active assignment must not be re-baselined")
@@ -592,6 +594,66 @@ def test_initial_baseline_accepts_ambiguous_one_way_history_without_replaying_it
     assert repository.lifecycle_changes == [LeaderLifecycle.ACTIVE]
     assert public.position_calls == []
     assert incidents == []
+
+
+def test_ambiguous_historical_order_identity_is_fenced_as_a_no_trade_baseline() -> None:
+    raw = {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "positionSide": "LONG",
+        "executedQty": "1",
+        "avgPrice": "2000",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    first = PublicLeaderOrder.from_api("5108371059752839168", raw)
+    second = PublicLeaderOrder.from_api(
+        "5108371059752839168",
+        {
+            **raw,
+            "executedQty": "2",
+            "orderUpdateTime": 1_700_000_002_000,
+        },
+    )
+    assert first.identity_key == second.identity_key
+
+    class BaselineRepository(FakeRepository):
+        def __init__(self) -> None:
+            super().__init__(
+                assignments=(
+                    replace(
+                        _assignment(),
+                        lifecycle=LeaderLifecycle.OBSERVE_ONLY,
+                    ),
+                )
+            )
+            self.lifecycle_changes: list[LeaderLifecycle] = []
+
+        def append_lifecycle(
+            self,
+            leader_id: str,
+            lifecycle: LeaderLifecycle,
+            **kwargs: Any,
+        ) -> None:
+            assert leader_id == "5108371059752839168"
+            assert isinstance(kwargs.get("occurred_at"), datetime)
+            self.lifecycle_changes.append(lifecycle)
+
+    repository = BaselineRepository()
+    report = _runtime(
+        repository,
+        FakePublic(orders=(first, second)),
+        FakeExecutor(),
+    ).run_cycle()
+
+    assert report.successful_polls == 1
+    assert report.new_signal_count == 0
+    assert repository.ingest_baselines == [True]
+    assert repository.poll_reason_codes == [("COPY_BASELINE_ORDER_IDENTITY_AMBIGUITY_FENCED",)]
+    assert repository.poll_maximum_update_times == [int(NOW.timestamp() * 1000)]
+    assert repository.lifecycle_changes == [LeaderLifecycle.ACTIVE]
 
 
 def test_reduce_all_auto_resumes_after_every_virtual_position_is_flat() -> None:
@@ -820,9 +882,7 @@ def test_leader_symbol_stop_cancels_matching_pending_entry_before_recovery() -> 
     report = _runtime(repository, FakePublic(), executor).run_cycle()
 
     assert report.processed_signal_count == 1
-    assert executor.cancel_reasons == [
-        "COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP"
-    ]
+    assert executor.cancel_reasons == ["COPY_PROTECTED_LIMIT_CANCELLED_BY_LEADER_SYMBOL_STOP"]
     assert repository.decisions == [
         (
             pending.signal_id,

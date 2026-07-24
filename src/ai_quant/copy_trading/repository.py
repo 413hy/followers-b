@@ -2665,15 +2665,36 @@ class CopyTradingRepository:
                           FROM copytrading.source_resolution_reset_events
                          WHERE lead_portfolio_id=%s
                          ORDER BY occurred_at DESC,reset_event_id DESC LIMIT 1
+                    ), source_watermark AS (
+                        SELECT max(update_time_ms) AS maximum_update_time_ms
+                          FROM copytrading.source_order_events
+                         WHERE lead_portfolio_id=%s
+                           AND observed_at>coalesce(
+                               (SELECT occurred_at FROM latest_reset),
+                               '-infinity'::timestamptz
+                           )
+                    ), baseline_fence AS (
+                        SELECT max(maximum_update_time_ms) AS maximum_update_time_ms
+                          FROM copytrading.poll_events
+                         WHERE lead_portfolio_id=%s
+                           AND state='SUCCEEDED'
+                           AND reason_codes
+                               ? 'COPY_BASELINE_ORDER_IDENTITY_AMBIGUITY_FENCED'
+                           AND occurred_at>coalesce(
+                               (SELECT occurred_at FROM latest_reset),
+                               '-infinity'::timestamptz
+                           )
                     )
-                    SELECT max(update_time_ms) AS maximum_update_time_ms
-                      FROM copytrading.source_order_events
-                     WHERE lead_portfolio_id=%s
-                       AND observed_at>coalesce(
-                           (SELECT occurred_at FROM latest_reset),'-infinity'::timestamptz
-                       )
+                    SELECT greatest(
+                             (SELECT maximum_update_time_ms FROM source_watermark),
+                             (SELECT maximum_update_time_ms FROM baseline_fence)
+                           ) AS maximum_update_time_ms
                     """,
-                    (lead_portfolio_id, lead_portfolio_id),
+                    (
+                        lead_portfolio_id,
+                        lead_portfolio_id,
+                        lead_portfolio_id,
+                    ),
                 )
                 row = cursor.fetchone()
         except psycopg.Error as error:

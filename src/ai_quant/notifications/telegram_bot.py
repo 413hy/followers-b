@@ -2146,6 +2146,11 @@ def _leader_admin_error_text(reason_code: str) -> str:
         "COPY_MANUAL_LEADER_POSITION_SIDE_AMBIGUOUS",
     }:
         return "已读到该带单员, 但公开操作的多空方向证据不完整, 系统为避免下反单已拒绝添加。"
+    if reason_code == "COPY_ORDER_IDENTITY_AMBIGUOUS":
+        return (
+            "已找到该带单员, 但 Binance 刚返回的新增操作缺少官方订单 ID 且无法唯一对应。"
+            "这不是链接或 ID 错误; 系统没有盲目补单, 请稍后重试。"
+        )
     if reason_code.endswith(("_ACCESS_DENIED", "_RETRY_EXHAUSTED")) or reason_code == (
         "COPY_PUBLIC_TRANSPORT_FAILED"
     ):

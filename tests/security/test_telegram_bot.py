@@ -1887,3 +1887,54 @@ def test_manual_leader_rejection_logs_and_displays_the_real_failure_reason(
         "reason_code": "COPY_MANUAL_LEADER_ONE_WAY_EVIDENCE_UNRESOLVED",
         "slot": "CUSTOM_2",
     }
+
+
+def test_manual_leader_identity_collision_message_does_not_blame_the_link(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def transport(
+        path: str,
+        document: dict[str, object],
+        timeout: float,
+    ) -> TelegramHttpResult:
+        del path, timeout
+        calls.append(document)
+        return TelegramHttpResult(
+            200,
+            json.dumps({"ok": True, "result": {"message_id": 91}}).encode(),
+        )
+
+    class RejectingLeaderAdmin(LeaderAdmin):
+        def create_external_leader_change(
+            self,
+            *,
+            user_id: int,
+            slot: LeaderSlot,
+            lead_portfolio_id: str,
+        ) -> LeaderChangeProposal:
+            del user_id, slot, lead_portfolio_id
+            raise RuntimeError("COPY_ORDER_IDENTITY_AMBIGUOUS")
+
+    router = TelegramMenuRouter(
+        client=TelegramBotClient(_config(tmp_path), transport=transport),
+        dashboard=Dashboard(),
+        challenges=Challenges(),
+        controls=Controls(),
+        leader_admin=RejectingLeaderAdmin(),
+    )
+    router.handle(
+        {
+            "message": {
+                "chat": {"id": 42},
+                "from": {"id": 42},
+                "text": "/leader_set custom3 5130551903329651712",
+            }
+        }
+    )
+
+    text = str(calls[-1]["text"])
+    assert "已找到该带单员" in text
+    assert "不是链接或 ID 错误" in text
+    assert "尚未配置中文明细" not in text

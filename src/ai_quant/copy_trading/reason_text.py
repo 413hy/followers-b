@@ -54,6 +54,12 @@ _LABELS = {
     "COPY_ORDER_STATUS_UNKNOWN": "暂时无法确认交易所订单状态, 系统不会重复下单",
     "COPY_ORDER_STATUS_UNKNOWN_WITH_FILL": "订单已有成交, 但最终状态暂未确认",
     "COPY_ORDER_RESPONSE_INVALID": "交易所返回的订单数据不完整或格式异常",
+    "COPY_ORDER_IDENTITY_AMBIGUOUS": (
+        "Binance 公开历史缺少官方订单 ID, 且多条记录的本地标识发生冲突"
+    ),
+    "COPY_BASELINE_ORDER_IDENTITY_AMBIGUITY_FENCED": (
+        "已把存在标识冲突的旧操作安全记为基线, 不会补下历史订单; 系统将从添加确认后的新操作开始跟单"
+    ),
     "COPY_ORDER_TERMINAL_WITHOUT_FILL": "订单已经终止且没有成交",
     "COPY_ORDER_TERMINAL_WITHOUT_FILL_PRICE": "订单已经成交, 但成交均价暂未同步完成",
     "COPY_FILL_PRICE_PENDING": "订单已成交, 正在补充查询成交均价",

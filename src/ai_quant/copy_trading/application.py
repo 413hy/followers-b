@@ -281,10 +281,21 @@ class CopyTradingRuntime:
                     and not protects_local_risk
                 )
                 baseline = initial_baseline or recovery_baseline
+                baseline_fence_ms: int | None = None
                 if baseline:
-                    page = self._public.order_history(
-                        assignment.lead_portfolio_id,
-                        page_size=COPY_ORDER_POLL_PAGE_SIZE,
+                    baseline_fence_ms = int(now.timestamp() * 1000)
+                    baseline_reader = getattr(self._public, "order_history_baseline", None)
+                    page = (
+                        baseline_reader(
+                            assignment.lead_portfolio_id,
+                            identity_guard_after_ms=baseline_fence_ms,
+                            page_size=COPY_ORDER_POLL_PAGE_SIZE,
+                        )
+                        if callable(baseline_reader)
+                        else self._public.order_history(
+                            assignment.lead_portfolio_id,
+                            page_size=COPY_ORDER_POLL_PAGE_SIZE,
+                        )
                     )
                 else:
                     watermark = self._repository.source_watermark(assignment.lead_portfolio_id)
@@ -297,6 +308,9 @@ class CopyTradingRuntime:
                         maximum_pages=20,
                     )
                 raw_orders = page.orders
+                baseline_identity_ambiguity = baseline and len(
+                    {order.identity_key for order in raw_orders}
+                ) != len(raw_orders)
                 deferred_baseline_direction = baseline and any(
                     order.position_side is SourcePositionSide.BOTH for order in raw_orders
                 )
@@ -330,20 +344,34 @@ class CopyTradingRuntime:
                     (order.update_time_ms for order in raw_orders),
                     default=None,
                 )
+                if baseline_identity_ambiguity:
+                    if baseline_fence_ms is None:
+                        raise RuntimeError("COPY_BASELINE_FENCE_MISSING")
+                    maximum_update = max(maximum_update or 0, baseline_fence_ms)
+                poll_reason_codes = tuple(
+                    code
+                    for condition, code in (
+                        (
+                            recovery_baseline,
+                            "COPY_RECOVERY_BASELINE_NO_OWNED_POSITION",
+                        ),
+                        (
+                            deferred_baseline_direction,
+                            "COPY_BASELINE_POSITION_SIDE_EVIDENCE_DEFERRED",
+                        ),
+                        (
+                            baseline_identity_ambiguity,
+                            "COPY_BASELINE_ORDER_IDENTITY_AMBIGUITY_FENCED",
+                        ),
+                    )
+                    if condition
+                )
                 self._repository.record_poll(
                     assignment.lead_portfolio_id,
                     state="SUCCEEDED",
                     row_count=len(page.orders),
                     maximum_update_time_ms=maximum_update,
-                    reason_codes=(
-                        ("COPY_RECOVERY_BASELINE_NO_OWNED_POSITION",)
-                        if recovery_baseline
-                        else (
-                            ("COPY_BASELINE_POSITION_SIDE_EVIDENCE_DEFERRED",)
-                            if deferred_baseline_direction
-                            else ()
-                        )
-                    ),
+                    reason_codes=poll_reason_codes,
                     occurred_at=now,
                 )
                 if assignment.lifecycle is LeaderLifecycle.OBSERVE_ONLY:

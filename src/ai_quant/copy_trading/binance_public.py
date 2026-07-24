@@ -400,6 +400,30 @@ class BinancePublicCopyClient:
             identity_guard_after_ms=None,
         )
 
+    def order_history_baseline(
+        self,
+        lead_portfolio_id: str,
+        *,
+        identity_guard_after_ms: int,
+        page_size: int = 100,
+    ) -> OrderHistoryPage:
+        """Read an initial baseline without rejecting ambiguous older history.
+
+        Binance's public copy history omits the exchange order ID.  An explicitly
+        selected leader may therefore have old rows whose derived identities
+        collide.  Those rows are safe to persist as a no-trade baseline, while any
+        collision at or after the supplied fence remains a hard failure.
+        """
+
+        if identity_guard_after_ms <= 0:
+            raise ValueError("copy order-history baseline fence is invalid")
+        return self._order_history_page(
+            lead_portfolio_id,
+            page_number=1,
+            page_size=page_size,
+            identity_guard_after_ms=identity_guard_after_ms,
+        )
+
     def _order_history_page(
         self,
         lead_portfolio_id: str,
