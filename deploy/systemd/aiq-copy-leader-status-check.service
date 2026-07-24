@@ -1,0 +1,40 @@
+[Unit]
+Description=AI Quant daily current-slot public leader status check
+After=network-online.target aiq-copy-migrations.service
+Wants=network-online.target
+Requires=aiq-copy-migrations.service
+OnFailure=aiq-copy-incident-reporter@%n.service
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/root/quantify/ai-quant-system
+UMask=0077
+ExecStart=/root/quantify/ai-quant-system/.venv/bin/python -m ai_quant.services.copy_leader_status_check --database-url-file /run/ai-quant-secrets/copy-business-database-url --repository-root /root/quantify/ai-quant-system
+TimeoutStartSec=1800
+Restart=on-failure
+RestartSec=600
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+InaccessiblePaths=/root/aiq-user-inputs -/run/ai-quant-production-secrets /run/ai-quant-secrets/binance-testnet-api-key /run/ai-quant-secrets/binance-testnet-api-secret /run/ai-quant-secrets/copy-telegram-bot-token /run/ai-quant-secrets/copy-telegram-chat-ids /run/ai-quant-secrets/copy-telegram-authorized-user-ids

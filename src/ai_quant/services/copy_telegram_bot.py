@@ -177,11 +177,15 @@ def main() -> int:
                             notify_chat_id,
                             notification.text,
                             reply_markup=(
-                                None
-                                if notification.contextual_view is None
-                                else notification_inline_keyboard(
-                                    notification.contextual_view,
-                                    notification.message_id,
+                                persistent_reply_keyboard()
+                                if notification.restore_navigation_keyboard
+                                else (
+                                    None
+                                    if notification.contextual_view is None
+                                    else notification_inline_keyboard(
+                                        notification.contextual_view,
+                                        notification.message_id,
+                                    )
                                 )
                             ),
                         )

@@ -162,6 +162,7 @@ def test_public_candidate_page_can_isolate_malformed_unrelated_rows() -> None:
     assert page.total == 2
     assert page.invalid_row_count == 1
     assert page.invalid_reason_codes == ("COPY_FIELD_NICKNAME_INVALID",)
+    assert page.invalid_leader_ids == ("5000000000000000001",)
 
 
 def test_public_directory_reads_every_server_sized_page() -> None:

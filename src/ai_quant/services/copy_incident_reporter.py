@@ -30,6 +30,7 @@ _ALLOWED_SOURCE_UNITS = frozenset(
         "aiq-copy-database-backup.service",
         "aiq-copy-infra.service",
         "aiq-copy-leader-selector.service",
+        "aiq-copy-leader-status-check.service",
         "aiq-copy-long-leader-selector.service",
         "aiq-copy-migrations.service",
         "aiq-copy-poller.service",

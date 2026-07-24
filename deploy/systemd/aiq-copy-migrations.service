@@ -2,7 +2,7 @@
 Description=Apply AI Quant copy-trading business migrations
 After=aiq-copy-infra.service
 Requires=aiq-copy-infra.service
-Before=aiq-copy-poller.service aiq-copy-telegram.service aiq-copy-watchdog.service aiq-copy-leader-selector.service aiq-copy-long-leader-selector.service aiq-copy-codex-audit.service
+Before=aiq-copy-poller.service aiq-copy-telegram.service aiq-copy-watchdog.service aiq-copy-leader-selector.service aiq-copy-long-leader-selector.service aiq-copy-leader-status-check.service aiq-copy-codex-audit.service
 OnFailure=aiq-copy-incident-reporter@%n.service
 
 [Service]

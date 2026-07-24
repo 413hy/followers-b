@@ -200,6 +200,7 @@ systemctl enable --now \
   aiq-copy-watchdog.timer \
   aiq-copy-leader-selector.timer \
   aiq-copy-long-leader-selector.timer \
+  aiq-copy-leader-status-check.timer \
   aiq-copy-codex-audit.timer \
   aiq-copy-database-backup.timer \
   aiq-copy-incident-replay.timer
@@ -212,6 +213,7 @@ Poller 第一次看到带单员时只建立历史基线，不会回放旧操作�
 ```bash
 systemctl start aiq-copy-long-leader-selector.service
 systemctl start aiq-copy-leader-selector.service
+systemctl start aiq-copy-leader-status-check.service
 ```
 
 这两个任务会读取公开候选数据并调用 Codex，可能持续数分钟。自动选人只管理 1 个长线和
@@ -237,6 +239,7 @@ systemctl is-enabled \
   aiq-copy-watchdog.timer \
   aiq-copy-leader-selector.timer \
   aiq-copy-long-leader-selector.timer \
+  aiq-copy-leader-status-check.timer \
   aiq-copy-codex-audit.timer \
   aiq-copy-database-backup.timer \
   aiq-copy-incident-replay.timer
@@ -248,6 +251,8 @@ journalctl -u aiq-copy-telegram.service -n 50 --no-pager
 journalctl -u aiq-testnet-user-stream.service -n 50 --no-pager
 systemctl start aiq-copy-watchdog.service
 journalctl -u aiq-copy-watchdog.service -n 30 --no-pager
+systemctl status aiq-copy-leader-status-check.timer --no-pager
+systemctl list-timers aiq-copy-leader-status-check.timer --all
 ```
 
 合格状态应当包括：

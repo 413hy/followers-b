@@ -30,6 +30,24 @@ def test_long_and_short_selectors_share_a_whole_run_lock() -> None:
         assert "StartLimitIntervalSec=3600" not in text
 
 
+def test_daily_leader_status_check_is_persistent_read_only_and_offset_from_selection() -> None:
+    root = Path(__file__).resolve().parents[2]
+    service = (root / "deploy/systemd/aiq-copy-leader-status-check.service").read_text(
+        encoding="utf-8"
+    )
+    timer = (root / "deploy/systemd/aiq-copy-leader-status-check.timer").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ai_quant.services.copy_leader_status_check" in service
+    assert "OnFailure=aiq-copy-incident-reporter@%n.service" in service
+    assert "/run/ai-quant-secrets/copy-business-database-url" in service
+    assert "copy-telegram-bot-token" in service
+    assert "InaccessiblePaths=" in service
+    assert "OnCalendar=*-*-* 01:10:00 Asia/Shanghai" in timer
+    assert "Persistent=true" in timer
+
+
 def _activity(**overrides: int) -> CandidateActivity:
     values = {
         "sample_order_count": 50,

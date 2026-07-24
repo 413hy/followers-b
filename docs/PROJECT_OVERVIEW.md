@@ -69,6 +69,7 @@ Telegram 授权用户调整，但每笔订单保证金最多 5 U。系统先以�
 | `aiq-copy-watchdog.timer` | 每 30 分钟确定性健康检查 |
 | `aiq-copy-codex-audit.timer` | 每小时脱敏审查，必要时进入修复闭环 |
 | 两个 selector timer | 短线每日、长线每周自动选人与备选维护 |
+| `aiq-copy-leader-status-check.timer` | 每日核对当前槽位带单项目是否仍公开；消失时仅提醒人工更换 |
 | backup/replay timer | 每日验证备份及每 5 分钟事故通知补发 |
 
 所有常驻服务和定时器均由 systemd 管理并配置开机自启。

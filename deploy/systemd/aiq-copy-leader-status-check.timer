@@ -1,0 +1,11 @@
+[Unit]
+Description=Check all assigned copy leaders daily at Shanghai 01:10
+
+[Timer]
+OnCalendar=*-*-* 01:10:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=aiq-copy-leader-status-check.service
+
+[Install]
+WantedBy=timers.target

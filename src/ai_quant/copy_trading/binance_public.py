@@ -48,6 +48,7 @@ class LeaderPage:
     total: int
     invalid_row_count: int = 0
     invalid_reason_codes: tuple[str, ...] = ()
+    invalid_leader_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +162,7 @@ class BinancePublicCopyClient:
         )
         leaders: list[LeaderSnapshot] = []
         invalid_reasons: list[str] = []
+        invalid_leader_ids: list[str] = []
         for row in rows:
             try:
                 leaders.append(LeaderSnapshot.from_api(_require_mapping(row)))
@@ -168,11 +170,16 @@ class BinancePublicCopyClient:
                 if not skip_invalid_rows:
                     raise BinancePublicCopyError(str(error)) from error
                 invalid_reasons.append(str(error))
+                if isinstance(row, Mapping):
+                    leader_id = str(row.get("leadPortfolioId", ""))
+                    if re.fullmatch(r"[0-9]{10,24}", leader_id):
+                        invalid_leader_ids.append(leader_id)
         return LeaderPage(
             leaders=tuple(leaders),
             total=total,
             invalid_row_count=len(invalid_reasons),
             invalid_reason_codes=tuple(sorted(set(invalid_reasons))),
+            invalid_leader_ids=tuple(sorted(set(invalid_leader_ids))),
         )
 
     def list_all_leaders(
@@ -233,6 +240,7 @@ class BinancePublicCopyClient:
         leaders = {leader.lead_portfolio_id: leader for leader in first.leaders}
         invalid_count = first.invalid_row_count
         invalid_reasons = set(first.invalid_reason_codes)
+        invalid_leader_ids = set(first.invalid_leader_ids)
         raw_rows_seen = raw_page_size
         page_number = 2
         while page_number <= required_pages:
@@ -252,6 +260,7 @@ class BinancePublicCopyClient:
             raw_rows_seen += raw_count
             invalid_count += page.invalid_row_count
             invalid_reasons.update(page.invalid_reason_codes)
+            invalid_leader_ids.update(page.invalid_leader_ids)
             for leader in page.leaders:
                 leaders[leader.lead_portfolio_id] = leader
             required_pages = (
@@ -269,6 +278,7 @@ class BinancePublicCopyClient:
             total=latest_total,
             invalid_row_count=invalid_count,
             invalid_reason_codes=tuple(sorted(invalid_reasons)),
+            invalid_leader_ids=tuple(sorted(invalid_leader_ids)),
         )
 
     def find_leader(

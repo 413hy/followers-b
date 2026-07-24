@@ -18,6 +18,7 @@ from ai_quant.copy_trading.telegram_state import (
     _control_message,
     _net_account_adjustment,
     _notification_contextual_view,
+    _notification_restores_navigation_keyboard,
     _notification_text,
     _operator_reason_label,
     _order_price_text,
@@ -66,12 +67,30 @@ def test_telegram_environment_labels_are_explicit_and_validated() -> None:
         ("copy_entry_margin_limit_change", "funds"),
         ("copy_leader_lock_change", "leaders"),
         ("copy_leader_symbol_stop_triggered", "positions"),
+        ("copy_leader_availability_alert", None),
         ("copy_health", "health"),
         ("unknown", "status"),
     ],
 )
 def test_notification_refresh_stays_in_its_own_context(event: str, expected: str) -> None:
     assert _notification_contextual_view({"event": event, "state": "FAILED"}) == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        ("copy_leader_manual_change", True),
+        ("copy_slot_replacement", True),
+        ("copy_slot_selection", True),
+        ("copy_leader_follow_multiplier_change", False),
+        ("copy_signal_decision", False),
+    ],
+)
+def test_leader_change_result_restores_navigation_keyboard(
+    event: str,
+    expected: bool,
+) -> None:
+    assert _notification_restores_navigation_keyboard({"event": event}) is expected
 
 
 def test_submitted_trade_signal_notification_has_no_inline_keyboard_context() -> None:
@@ -110,6 +129,27 @@ def test_pnl_reset_notification_is_explicit_and_keyboard_free() -> None:
     assert "账户未占用资金(含保留) 61.44 U" in text
     assert "交易所实际占用 88.56 U" in text
     assert "07-21 09:30:00" in text
+    assert _notification_contextual_view(payload) is None
+
+
+def test_missing_current_leader_alert_is_explicit_and_has_no_inline_keyboard() -> None:
+    payload = {
+        "event": "copy_leader_availability_alert",
+        "state": "MISSING",
+        "slot": "CUSTOM_3",
+        "lead_portfolio_id": "5078426407158237953",
+        "nickname": "AI 的优势",
+        "checked_at": "2026-07-24T01:10:00+00:00",
+        "reason_codes": ["COPY_LEADER_PUBLIC_PROJECT_MISSING"],
+    }
+
+    text = _notification_text(payload)
+
+    assert text.startswith("⚠️ 当前槽位的带单员已不在公开带单目录\n")
+    assert "🎯 自定义 3" in text
+    assert "AI 的优势 (ID 5078426407158237953)" in text
+    assert "仅发送本次提醒" in text
+    assert "未清空或替换槽位, 未取消订单, 未处理任何仓位" in text
     assert _notification_contextual_view(payload) is None
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -569,6 +570,132 @@ class CopyTradingRepository:
             for row in rows
             if row["action"] == "ASSIGNED" and row["lead_portfolio_id"] is not None
         }
+
+    def record_leader_availability(
+        self,
+        *,
+        slot: LeaderSlot,
+        lead_portfolio_id: str,
+        state: str,
+        public_directory_total: int,
+        valid_directory_total: int,
+        invalid_row_count: int,
+        observed_at: datetime,
+    ) -> bool:
+        """Record one status observation and enqueue only the first alert in a missing episode."""
+
+        _require_utc(observed_at)
+        if (
+            not re.fullmatch(r"[0-9]{10,24}", lead_portfolio_id)
+            or state not in {"AVAILABLE", "MISSING"}
+            or public_directory_total <= 0
+            or valid_directory_total < 0
+            or invalid_row_count < 0
+        ):
+            raise ValueError("copy leader availability observation is invalid")
+        reason_codes = (
+            ["COPY_LEADER_PUBLIC_PROJECT_AVAILABLE"]
+            if state == "AVAILABLE"
+            else ["COPY_LEADER_PUBLIC_PROJECT_MISSING"]
+        )
+        evidence = {
+            "slot": slot.value,
+            "lead_portfolio_id": lead_portfolio_id,
+            "state": state,
+            "public_directory_total": public_directory_total,
+            "valid_directory_total": valid_directory_total,
+            "invalid_row_count": invalid_row_count,
+            "reason_codes": reason_codes,
+            "observed_at": observed_at.isoformat(),
+        }
+        event_id = _digest(evidence)
+        alert_created = False
+        try:
+            with self._connect() as connection, connection.cursor() as cursor:
+                # Serialize against Telegram and selector slot changes. A leader that was
+                # manually replaced while the directory was being read must not generate
+                # a stale disappearance alert for its former slot.
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    ("copy-leader-slots",),
+                )
+                cursor.execute(
+                    """
+                    SELECT action,lead_portfolio_id,occurred_at
+                      FROM copytrading.leader_slot_events
+                     WHERE slot=%s
+                     ORDER BY occurred_at DESC,slot_event_id DESC LIMIT 1
+                    """,
+                    (slot.value,),
+                )
+                assignment = cursor.fetchone()
+                if (
+                    assignment is None
+                    or assignment["action"] != "ASSIGNED"
+                    or str(assignment["lead_portfolio_id"]) != lead_portfolio_id
+                ):
+                    return False
+                cursor.execute(
+                    """
+                    SELECT state FROM copytrading.leader_availability_events
+                     WHERE slot=%s AND lead_portfolio_id=%s AND observed_at >= %s
+                     ORDER BY observed_at DESC,availability_event_id DESC LIMIT 1
+                    """,
+                    (slot.value, lead_portfolio_id, assignment["occurred_at"]),
+                )
+                previous = cursor.fetchone()
+                previous_state = None if previous is None else str(previous["state"])
+                cursor.execute(
+                    """
+                    INSERT INTO copytrading.leader_availability_events(
+                      availability_event_id,slot,lead_portfolio_id,state,
+                      public_directory_total,valid_directory_total,invalid_row_count,
+                      reason_codes,evidence_hash,observed_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        event_id,
+                        slot.value,
+                        lead_portfolio_id,
+                        state,
+                        public_directory_total,
+                        valid_directory_total,
+                        invalid_row_count,
+                        Jsonb(reason_codes),
+                        _digest(evidence),
+                        observed_at,
+                    ),
+                )
+                if state != "MISSING" or previous_state == "MISSING":
+                    return False
+                payload = {
+                    "event": "copy_leader_availability_alert",
+                    "state": "MISSING",
+                    "slot": slot.value,
+                    "lead_portfolio_id": lead_portfolio_id,
+                    "nickname": _leader_nickname(cursor, lead_portfolio_id),
+                    "checked_at": observed_at.isoformat(),
+                    "reason_codes": reason_codes,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO control.outbox(
+                      message_id,deduplication_key,topic,payload,payload_hash
+                    ) VALUES (%s,%s,'copy.telegram',%s,%s)
+                    ON CONFLICT (deduplication_key) DO NOTHING
+                    """,
+                    (
+                        _digest({"leader_availability_alert": event_id}),
+                        f"copy-leader-availability-alert:{event_id}",
+                        Jsonb(payload),
+                        _digest(payload),
+                    ),
+                )
+                alert_created = cursor.rowcount == 1
+        except psycopg.Error as error:
+            raise CopyRepositoryError("COPY_LEADER_AVAILABILITY_WRITE_FAILED") from error
+        return alert_created
 
     def current_locked_leader_ids(self) -> frozenset[str]:
         try:

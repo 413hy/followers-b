@@ -205,6 +205,87 @@ def main() -> int:
     )
     assert source_assignment.follow_multiplier == 3
     assert telegram.leader_multiplier_choices()[0].current_multiplier == 3
+    availability_at = datetime.now(UTC) + timedelta(seconds=1)
+    assert (
+        repository.record_leader_availability(
+            slot=LeaderSlot.SHORT_TERM_1,
+            lead_portfolio_id=source_leader.lead_portfolio_id,
+            state="AVAILABLE",
+            public_directory_total=100,
+            valid_directory_total=100,
+            invalid_row_count=0,
+            observed_at=availability_at,
+        )
+        is False
+    )
+    missing_at = availability_at + timedelta(seconds=1)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        missing_alerts = tuple(
+            executor.map(
+                lambda _: repository.record_leader_availability(
+                    slot=LeaderSlot.SHORT_TERM_1,
+                    lead_portfolio_id=source_leader.lead_portfolio_id,
+                    state="MISSING",
+                    public_directory_total=100,
+                    valid_directory_total=99,
+                    invalid_row_count=0,
+                    observed_at=missing_at,
+                ),
+                range(8),
+            )
+        )
+    assert missing_alerts.count(True) == 1
+    assert missing_alerts.count(False) == 7
+    recovered_availability_at = missing_at + timedelta(seconds=1)
+    assert (
+        repository.record_leader_availability(
+            slot=LeaderSlot.SHORT_TERM_1,
+            lead_portfolio_id=source_leader.lead_portfolio_id,
+            state="AVAILABLE",
+            public_directory_total=100,
+            valid_directory_total=100,
+            invalid_row_count=0,
+            observed_at=recovered_availability_at,
+        )
+        is False
+    )
+    assert repository.record_leader_availability(
+        slot=LeaderSlot.SHORT_TERM_1,
+        lead_portfolio_id=source_leader.lead_portfolio_id,
+        state="MISSING",
+        public_directory_total=100,
+        valid_directory_total=99,
+        invalid_row_count=0,
+        observed_at=recovered_availability_at + timedelta(seconds=1),
+    )
+    assert (
+        repository.record_leader_availability(
+            slot=LeaderSlot.LONG_TERM,
+            lead_portfolio_id=source_leader.lead_portfolio_id,
+            state="MISSING",
+            public_directory_total=100,
+            valid_directory_total=99,
+            invalid_row_count=0,
+            observed_at=recovered_availability_at + timedelta(seconds=2),
+        )
+        is False
+    )
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM copytrading.leader_availability_events "
+            "WHERE slot='SHORT_TERM_1' AND lead_portfolio_id=%s",
+            (source_leader.lead_portfolio_id,),
+        )
+        # Eight simultaneous identical missing observations collapse to one
+        # append-only event, while recovery starts a new alert episode.
+        assert cursor.fetchone() == (4,)
+        cursor.execute(
+            "SELECT count(*) FROM control.outbox "
+            "WHERE payload->>'event'='copy_leader_availability_alert' "
+            "AND payload->>'lead_portfolio_id'=%s",
+            (source_leader.lead_portfolio_id,),
+        )
+        assert cursor.fetchone() == (2,)
     stale_multiplier_proposal = telegram.create_follow_multiplier_change(
         user_id=42,
         lead_portfolio_id=source_leader.lead_portfolio_id,
@@ -1052,7 +1133,15 @@ def main() -> int:
         leader.lead_portfolio_id,
     )
     notifications = telegram.claim_notifications()
-    assert len(notifications) == 18, [item.text for item in notifications]
+    assert len(notifications) == 20, [item.text for item in notifications]
+    availability_notifications = tuple(
+        item
+        for item in notifications
+        if "当前槽位的带单员已不在公开带单目录" in item.text
+    )
+    assert len(availability_notifications) == 2
+    assert all(item.contextual_view is None for item in availability_notifications)
+    assert all("未清空或替换槽位" in item.text for item in availability_notifications)
     assert any("source integration leader" in item.text for item in notifications)
     assert any("database integration leader" in item.text for item in notifications)
     assert any("3倍" in item.text for item in notifications)
