@@ -94,7 +94,7 @@ def _leader_symbol_stop(
         net_position_pnl_usdt=Decimal("-10.5"),
         loss_limit_usdt=Decimal("10"),
         triggered_at=NOW,
-        blocked_until=NOW + timedelta(hours=48),
+        blocked_until=NOW + timedelta(hours=24),
         newly_triggered=True,
     )
 

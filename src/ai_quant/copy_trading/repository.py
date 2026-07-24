@@ -1972,10 +1972,9 @@ class CopyTradingRepository:
         """Activate and recover isolated leader/symbol stops from current position PnL.
 
         Only position sides whose latest quantity remains positive participate.
-        Each side uses the same current-position cumulative PnL shown by Telegram:
-        realized partial reductions in that still-open position cycle plus current
-        unrealized PnL. A fully closed historical position is excluded. LONG and
-        SHORT are then netted only inside the same leader and symbol.
+        Already realized reductions and fully closed historical positions are
+        excluded. Current LONG and SHORT unrealized PnL are netted only inside
+        the same leader and symbol.
         Every active cooldown continuously derives close signals from the latest
         append-only virtual-position events, so a late entry fill or process restart
         cannot leave risk behind.
@@ -2014,35 +2013,8 @@ class CopyTradingRepository:
                        ORDER BY lead_portfolio_id,symbol,position_side,
                                 observed_at DESC,pnl_event_id DESC
                     )
-                    SELECT latest.*,
-                           coalesce(position_cycle.realized_pnl_usdt,0)
-                             AS cycle_realized_pnl_usdt
+                    SELECT latest.*
                       FROM latest
-                      LEFT JOIN LATERAL (
-                        SELECT started.observed_at,started.pnl_event_id
-                          FROM copytrading.leader_pnl_events AS started
-                         WHERE started.lead_portfolio_id=latest.lead_portfolio_id
-                           AND started.symbol=latest.symbol
-                           AND started.position_side=latest.position_side
-                           AND started.previous_quantity=0
-                           AND started.resulting_quantity>0
-                           AND (started.observed_at,started.pnl_event_id)
-                               <= (latest.observed_at,latest.pnl_event_id)
-                         ORDER BY started.observed_at DESC,started.pnl_event_id DESC
-                         LIMIT 1
-                      ) AS cycle_start ON true
-                      LEFT JOIN LATERAL (
-                        SELECT coalesce(sum(cycle.realized_pnl_delta_usdt),0)
-                                 AS realized_pnl_usdt
-                          FROM copytrading.leader_pnl_events AS cycle
-                         WHERE cycle.lead_portfolio_id=latest.lead_portfolio_id
-                           AND cycle.symbol=latest.symbol
-                           AND cycle.position_side=latest.position_side
-                           AND (cycle.observed_at,cycle.pnl_event_id)
-                               >= (cycle_start.observed_at,cycle_start.pnl_event_id)
-                           AND (cycle.observed_at,cycle.pnl_event_id)
-                               <= (latest.observed_at,latest.pnl_event_id)
-                      ) AS position_cycle ON true
                      WHERE latest.resulting_quantity>0
                      ORDER BY latest.lead_portfolio_id,latest.symbol,latest.position_side
                     """,
@@ -2069,9 +2041,6 @@ class CopyTradingRepository:
                                 str(row["resulting_average_entry_price"])
                             ),
                             mark_price=mark_price,
-                            cycle_realized_pnl_usdt=Decimal(
-                                str(row["cycle_realized_pnl_usdt"])
-                            ),
                         )
                     )
                 positions_by_key: dict[
@@ -2120,21 +2089,17 @@ class CopyTradingRepository:
                     breakdown = [
                         {
                             "average_entry_price": str(position.average_entry_price),
-                            "cycle_realized_pnl_usdt": str(
-                                position.cycle_realized_pnl_usdt
-                            ),
                             "mark_price": str(position.mark_price),
                             "position_event_id": position.position_event_id,
                             "position_side": position.position_side.value,
                             "quantity": str(position.quantity),
-                            "total_pnl_usdt": str(position.total_pnl_usdt),
                             "unrealized_pnl_usdt": str(position.unrealized_pnl_usdt),
                         }
                         for position in positions_by_key[key]
                     ]
                     reason_codes = (
                         "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED",
-                        "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H",
+                        "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_24H",
                     )
                     cursor.execute(
                         """

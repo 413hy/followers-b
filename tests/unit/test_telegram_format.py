@@ -122,23 +122,23 @@ def test_leader_symbol_stop_notification_explains_netting_isolation_and_cooldown
         "net_position_pnl_usdt": "-10.25",
         "loss_limit_usdt": "10",
         "position_pnl_breakdown": [
-            {"position_side": "LONG", "total_pnl_usdt": "-15"},
-            {"position_side": "SHORT", "total_pnl_usdt": "4.75"},
+            {"position_side": "LONG", "unrealized_pnl_usdt": "-15"},
+            {"position_side": "SHORT", "unrealized_pnl_usdt": "4.75"},
         ],
-        "blocked_until": "2026-07-26T03:00:00+00:00",
+        "blocked_until": "2026-07-25T03:00:00+00:00",
         "occurred_at": "2026-07-24T03:00:00+00:00",
         "reason_codes": [
             "COPY_LEADER_SYMBOL_NET_LOSS_LIMIT_REACHED",
-            "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_48H",
+            "COPY_LEADER_SYMBOL_ENTRY_COOLDOWN_24H",
         ],
     }
 
     text = _notification_text(payload)
 
-    assert "现有仓位累计盈亏合计: -10.25 U (多 -15 U | 空 +4.75 U)" in text
+    assert "现有仓位合计浮盈亏: -10.25 U (多 -15 U | 空 +4.75 U)" in text
     assert "其他带单员、其他币种均不受影响" in text
     assert "减仓和平仓仍允许" in text
-    assert "07-26 11:00:00 (48小时后自动恢复)" in text
+    assert "07-25 11:00:00 (24小时后自动恢复)" in text
 
 
 def test_stop_generated_close_notification_has_distinct_title_and_scope() -> None:
@@ -150,7 +150,7 @@ def test_stop_generated_close_notification_has_distinct_title_and_scope() -> Non
             "leader_symbol_stop_event_id": "7" * 64,
             "stop_net_position_pnl_usdt": "-10.25",
             "stop_loss_limit_usdt": "10",
-            "stop_blocked_until": "2026-07-26T03:00:00+00:00",
+            "stop_blocked_until": "2026-07-25T03:00:00+00:00",
             "symbol": "BTCUSDT",
             "position_side": "LONG",
             "signal_kind": "REDUCE",
@@ -168,7 +168,7 @@ def test_stop_generated_close_notification_has_distinct_title_and_scope() -> Non
 
     assert "✅ 单币种止损平仓成功" in text
     assert "仅平该带单员此币种" in text
-    assert "冷却至 07-26 11:00:00" in text
+    assert "冷却至 07-25 11:00:00" in text
 
 
 def test_entry_margin_change_notification_is_explicit_and_returns_to_funds() -> None:

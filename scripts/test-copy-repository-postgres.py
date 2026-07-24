@@ -878,7 +878,7 @@ def main() -> int:
     assert active_stops[0].lead_portfolio_id == LEADER_ID
     assert active_stops[0].symbol == "ETHUSDT"
     assert active_stops[0].net_position_pnl_usdt == Decimal("-15")
-    assert active_stops[0].blocked_until == stop_at + timedelta(hours=48)
+    assert active_stops[0].blocked_until == stop_at + timedelta(hours=24)
     assert active_stops[0].newly_triggered is True
     active_stop_read = repository.active_leader_symbol_stop(
         lead_portfolio_id=LEADER_ID,
@@ -1054,7 +1054,7 @@ def main() -> int:
     assert any("已解锁" in item.text for item in notifications)
     assert any("本轮自动换人已取消" in item.text for item in notifications)
     assert any("交易资金净值已恢复为 150 U" in item.text for item in notifications)
-    assert any("现有仓位累计盈亏合计: -15 U" in item.text for item in notifications)
+    assert any("现有仓位合计浮盈亏: -15 U" in item.text for item in notifications)
     assert any("其他带单员、其他币种均不受影响" in item.text for item in notifications)
     for notification in notifications:
         telegram.complete_notification(notification.message_id, delivered=True)
