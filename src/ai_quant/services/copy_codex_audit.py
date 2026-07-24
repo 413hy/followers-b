@@ -18,7 +18,11 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ai_quant.copy_trading.codex_audit import CodexAuditError, CodexSystemAuditor
+from ai_quant.copy_trading.codex_audit import (
+    CodexAuditError,
+    CodexAuditResult,
+    CodexSystemAuditor,
+)
 from ai_quant.copy_trading.health import HealthState, PostgresHealthStore
 from ai_quant.copy_trading.models import RuntimeControlState
 from ai_quant.copy_trading.repository import CopyTradingRepository
@@ -311,23 +315,67 @@ def _persist_resolved_incidents(
     return inserted
 
 
-def _newly_resolved_incident_ids(
-    before: list[dict[str, Any]],
-    after: list[dict[str, Any]],
-) -> frozenset[str]:
-    """Identify failures that recovered while the Codex review itself was running."""
+def _audit_fault_signature(snapshot: dict[str, Any]) -> str:
+    """Return only evidence that can materially change an audit decision.
 
-    unresolved = {
-        str(incident.get("incident_id", ""))
-        for incident in before
-        if incident.get("resolved") is not True
+    A Codex review can take longer than one poll interval. Excluding monotonically
+    changing ages while retaining every current fault keeps the publication fence
+    sensitive to recovery, deterioration, and replacement by a different fault.
+    """
+
+    oldest_notification = snapshot.get("oldest_pending_notification_seconds")
+    try:
+        notification_stalled = (
+            oldest_notification is not None and float(oldest_notification) > 600
+        )
+    except (TypeError, ValueError):
+        notification_stalled = True
+    poll_age = snapshot.get("maximum_poll_age_seconds")
+    try:
+        poll_stale = poll_age is None or float(poll_age) > 120
+    except (TypeError, ValueError):
+        poll_stale = True
+    material = {
+        key: snapshot.get(key)
+        for key in (
+            "latest_poll_failures",
+            "latest_history_gap_failures",
+            "uncertain_signals",
+            "failed_signals_last_hour",
+            "overdue_pending_entries",
+            "overdue_slot_replacements",
+            "dead_notifications",
+            "runtime_control",
+            "latest_watchdog_state",
+            "latest_watchdog_finding_codes",
+            "service_states",
+            "recent_service_incidents",
+            "recent_signal_errors",
+            "recent_leader_poll_failures",
+            "recent_selection_failures",
+            "latest_code_repair",
+        )
     }
-    resolved_after = {
-        str(incident.get("incident_id", ""))
-        for incident in after
-        if incident.get("resolved") is True
-    }
-    return frozenset(identifier for identifier in unresolved & resolved_after if identifier)
+    material["poll_stale"] = poll_stale
+    material["notification_stalled"] = notification_stalled
+    return hashlib.sha256(
+        json.dumps(
+            material,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+def _audit_fault_evidence_changed(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> bool:
+    """Fence a model decision from both stale recoveries and newly appearing faults."""
+
+    return _audit_fault_signature(before) != _audit_fault_signature(after)
 
 
 def _recent_signal_errors(
@@ -547,6 +595,93 @@ def _latest_repair(database_url: str) -> dict[str, Any] | None:
     }
 
 
+def _read_live_audit_state(
+    database_url: str,
+    *,
+    environment: str,
+) -> dict[str, Any]:
+    """Read one internally consistent-enough live snapshot for model review and gates."""
+
+    now = datetime.now(UTC)
+    facts = PostgresHealthStore(database_url).read_facts()
+    unit_states = {
+        _POLLER_UNIT: _unit_state(_POLLER_UNIT),
+        _TELEGRAM_UNIT: _unit_state(_TELEGRAM_UNIT),
+    }
+    recent_signal_errors = _recent_signal_errors(database_url, now=now)
+    recent_service_incidents = _recent_incidents(now=now)
+    sanitized = {
+        "schema_version": "1.0.0",
+        "environment": f"BINANCE_USDM_{environment}",
+        "production": "ACTIVE" if environment == "PRODUCTION" else "LOCKED",
+        "active_leaders": facts.active_leaders,
+        "assigned_leader_slots": facts.assigned_slots,
+        "maximum_poll_age_seconds": facts.stale_poll_seconds,
+        "latest_poll_failures": facts.latest_poll_failures,
+        "latest_history_gap_failures": facts.history_gap_failures,
+        "uncertain_signals": facts.uncertain_signals,
+        "failed_signals_last_hour": facts.failed_signals_last_hour,
+        "overdue_pending_entries": facts.overdue_pending_entries,
+        "overdue_slot_replacements": facts.overdue_slot_replacements,
+        "dead_notifications": facts.dead_notifications,
+        "pending_notifications": facts.pending_notifications,
+        "oldest_pending_notification_seconds": facts.oldest_pending_notification_seconds,
+        "daily_selection_age_hours": facts.selection_age_hours,
+        "short_selection_age_hours": facts.short_selection_age_hours,
+        "long_selection_age_hours": facts.long_selection_age_hours,
+        "runtime_control": facts.control_state.value,
+        "virtual_position_groups": len(facts.virtual_positions),
+        "latest_watchdog_age_seconds": facts.latest_watchdog_age_seconds,
+        "latest_watchdog_state": facts.latest_watchdog_state,
+        "latest_watchdog_finding_codes": list(facts.latest_watchdog_finding_codes),
+        "service_states": unit_states,
+        "recent_service_incidents": recent_service_incidents,
+        "recent_signal_errors": recent_signal_errors,
+        "recent_leader_poll_failures": _recent_leader_poll_failures(
+            database_url,
+            now=now,
+        ),
+        "recent_selection_failures": _recent_selection_failures(
+            database_url,
+            now=now,
+        ),
+        "latest_code_repair": _latest_repair(database_url),
+    }
+    return {
+        "facts": facts,
+        "unit_states": unit_states,
+        "recent_signal_errors": recent_signal_errors,
+        "recent_service_incidents": recent_service_incidents,
+        "sanitized": sanitized,
+    }
+
+
+def _audit_with_publication_fence(
+    auditor: CodexSystemAuditor,
+    initial_state: dict[str, Any],
+    refresh_state: Callable[[], dict[str, Any]],
+) -> tuple[CodexAuditResult, dict[str, Any], dict[str, Any]]:
+    """Review at most three changing snapshots and return matching live gates."""
+
+    audit_state = initial_state
+    for attempt in range(3):
+        sanitized = audit_state["sanitized"]
+        result = auditor.audit(sanitized)
+        refreshed_state = refresh_state()
+        if not _audit_fault_evidence_changed(
+            sanitized,
+            refreshed_state["sanitized"],
+        ):
+            # Use the freshest operational values for deterministic action gates;
+            # the material evidence reviewed by Codex is unchanged.
+            return result, refreshed_state, refreshed_state["sanitized"]
+        if attempt < 2:
+            audit_state = refreshed_state
+    # Genuine fault churn can keep changing. The bounded final result is paired
+    # with the exact snapshot it reviewed rather than a newer, unreviewed state.
+    return result, audit_state, sanitized
+
+
 def _persist(
     database_url: str,
     document: dict[str, Any],
@@ -673,70 +808,26 @@ def main() -> int:
         arguments.repository_root,
         reason="COPY_DATABASE_URL_FILE_UNSAFE",
     )
-    facts = PostgresHealthStore(database_url).read_facts()
-    unit_states = {
-        _POLLER_UNIT: _unit_state(_POLLER_UNIT),
-        _TELEGRAM_UNIT: _unit_state(_TELEGRAM_UNIT),
-    }
-    recent_signal_errors = _recent_signal_errors(
+    audit_state = _read_live_audit_state(
         database_url,
-        now=datetime.now(UTC),
+        environment=arguments.environment,
     )
-    recent_service_incidents = _recent_incidents(now=datetime.now(UTC))
-    sanitized = {
-        "schema_version": "1.0.0",
-        "environment": f"BINANCE_USDM_{arguments.environment}",
-        "production": "ACTIVE" if arguments.environment == "PRODUCTION" else "LOCKED",
-        "active_leaders": facts.active_leaders,
-        "assigned_leader_slots": facts.assigned_slots,
-        "maximum_poll_age_seconds": facts.stale_poll_seconds,
-        "latest_poll_failures": facts.latest_poll_failures,
-        "latest_history_gap_failures": facts.history_gap_failures,
-        "uncertain_signals": facts.uncertain_signals,
-        "failed_signals_last_hour": facts.failed_signals_last_hour,
-        "overdue_pending_entries": facts.overdue_pending_entries,
-        "overdue_slot_replacements": facts.overdue_slot_replacements,
-        "dead_notifications": facts.dead_notifications,
-        "pending_notifications": facts.pending_notifications,
-        "oldest_pending_notification_seconds": facts.oldest_pending_notification_seconds,
-        "daily_selection_age_hours": facts.selection_age_hours,
-        "short_selection_age_hours": facts.short_selection_age_hours,
-        "long_selection_age_hours": facts.long_selection_age_hours,
-        "runtime_control": facts.control_state.value,
-        "virtual_position_groups": len(facts.virtual_positions),
-        "latest_watchdog_age_seconds": facts.latest_watchdog_age_seconds,
-        "latest_watchdog_state": facts.latest_watchdog_state,
-        "latest_watchdog_finding_codes": list(facts.latest_watchdog_finding_codes),
-        "service_states": unit_states,
-        "recent_service_incidents": recent_service_incidents,
-        "recent_signal_errors": recent_signal_errors,
-        "recent_leader_poll_failures": _recent_leader_poll_failures(
-            database_url,
-            now=datetime.now(UTC),
-        ),
-        "recent_selection_failures": _recent_selection_failures(
-            database_url,
-            now=datetime.now(UTC),
-        ),
-        "latest_code_repair": _latest_repair(database_url),
-    }
     try:
         auditor = CodexSystemAuditor(
             schema_path=arguments.schema_file,
             work_root=arguments.work_root,
         )
-        result = auditor.audit(sanitized)
-        refreshed_incidents = _recent_incidents(now=datetime.now(UTC))
-        if _newly_resolved_incident_ids(recent_service_incidents, refreshed_incidents):
-            # A one-shot recovery may finish during the model call. Re-run once with current
-            # service evidence so an already-resolved fault is not published as a fresh alert.
-            recent_service_incidents = refreshed_incidents
-            sanitized["recent_service_incidents"] = recent_service_incidents
-            sanitized["service_states"] = {
-                _POLLER_UNIT: _unit_state(_POLLER_UNIT),
-                _TELEGRAM_UNIT: _unit_state(_TELEGRAM_UNIT),
-            }
-            result = auditor.audit(sanitized)
+        # The model call can outlast multiple ten-second polling cycles. Re-read
+        # every material fault after it returns and re-review a changed snapshot,
+        # bounded to avoid an unending audit during genuine fault churn.
+        result, audit_state, sanitized = _audit_with_publication_fence(
+            auditor,
+            audit_state,
+            lambda: _read_live_audit_state(
+                database_url,
+                environment=arguments.environment,
+            ),
+        )
     except CodexAuditError as error:
         now = datetime.now(UTC)
         reason_code = str(error)
@@ -768,6 +859,10 @@ def main() -> int:
             flush=True,
         )
         raise
+    facts = audit_state["facts"]
+    unit_states = audit_state["unit_states"]
+    recent_signal_errors = audit_state["recent_signal_errors"]
+    recent_service_incidents = audit_state["recent_service_incidents"]
     document = dict(result.document)
     recommended = document.get("recommended_actions")
     actions = [str(value) for value in recommended] if isinstance(recommended, list) else []

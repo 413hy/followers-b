@@ -18,7 +18,8 @@ from ai_quant.copy_trading.codex_repair import CodexSystemRepairer
 from ai_quant.services.copy_codex_audit import (
     _RECENT_LEADER_POLL_FAILURES_SQL,
     _RECENT_SIGNAL_ERRORS_SQL,
-    _newly_resolved_incident_ids,
+    _audit_fault_evidence_changed,
+    _audit_with_publication_fence,
     _pause_new_entries_justified,
     _reconciliation_status,
 )
@@ -41,17 +42,88 @@ def test_codex_audit_reads_exact_latest_failure_for_each_active_leader() -> None
     assert "failure_count_last_10_minutes" in _RECENT_LEADER_POLL_FAILURES_SQL
 
 
-def test_audit_detects_incident_recovery_during_model_review() -> None:
-    incident_id = "a" * 64
+def test_audit_publication_fence_detects_recovered_leader_poll() -> None:
+    failed = {
+        "latest_poll_failures": 1,
+        "maximum_poll_age_seconds": 3,
+        "oldest_pending_notification_seconds": 0,
+        "latest_watchdog_state": "HEALTHY",
+        "service_states": {"aiq-copy-poller.service": "active"},
+        "recent_leader_poll_failures": [
+            {
+                "leader_id": "5075281354358777856",
+                "state": "CONTRACT_DRIFT",
+                "reason_codes": ["COPY_ORDER_IDENTITY_AMBIGUOUS"],
+            }
+        ],
+    }
+    recovered = {
+        **failed,
+        "latest_poll_failures": 0,
+        "recent_leader_poll_failures": [],
+    }
 
-    assert _newly_resolved_incident_ids(
-        [{"incident_id": incident_id, "resolved": False}],
-        [{"incident_id": incident_id, "resolved": True}],
-    ) == frozenset({incident_id})
-    assert not _newly_resolved_incident_ids(
-        [{"incident_id": incident_id, "resolved": True}],
-        [{"incident_id": incident_id, "resolved": True}],
+    assert _audit_fault_evidence_changed(failed, recovered)
+    assert not _audit_fault_evidence_changed(recovered, dict(recovered))
+
+
+def test_audit_publication_fence_ignores_only_age_progression() -> None:
+    before = {
+        "maximum_poll_age_seconds": 3,
+        "latest_watchdog_age_seconds": 10,
+        "oldest_pending_notification_seconds": 4,
+        "daily_selection_age_hours": 1,
+        "latest_watchdog_state": "HEALTHY",
+        "service_states": {"aiq-copy-poller.service": "active"},
+    }
+    after = {
+        **before,
+        "maximum_poll_age_seconds": 18,
+        "latest_watchdog_age_seconds": 25,
+        "oldest_pending_notification_seconds": 19,
+        "daily_selection_age_hours": 1.01,
+    }
+
+    assert not _audit_fault_evidence_changed(before, after)
+
+
+def test_audit_publication_fence_reviews_recovered_snapshot_before_publish() -> None:
+    failed = {
+        "sanitized": {
+            "latest_poll_failures": 1,
+            "maximum_poll_age_seconds": 3,
+            "oldest_pending_notification_seconds": 0,
+            "recent_leader_poll_failures": [{"leader_id": "5075281354358777856"}],
+        },
+        "facts": "failed",
+    }
+    recovered = {
+        "sanitized": {
+            **failed["sanitized"],
+            "latest_poll_failures": 0,
+            "recent_leader_poll_failures": [],
+        },
+        "facts": "recovered",
+    }
+    reviewed: list[dict[str, Any]] = []
+
+    class FakeAuditor:
+        def audit(self, facts: dict[str, Any]) -> Any:
+            reviewed.append(dict(facts))
+            return SimpleNamespace(document={"status": "HEALTHY"})
+
+    result, current, sanitized = _audit_with_publication_fence(
+        FakeAuditor(),  # type: ignore[arg-type]
+        failed,
+        lambda: recovered,
     )
+
+    assert len(reviewed) == 2
+    assert reviewed[0]["latest_poll_failures"] == 1
+    assert reviewed[1]["latest_poll_failures"] == 0
+    assert result.document["status"] == "HEALTHY"
+    assert current["facts"] == "recovered"
+    assert sanitized["recent_leader_poll_failures"] == []
 
 
 def test_codex_intervention_uses_explicit_frontier_model_policy() -> None:

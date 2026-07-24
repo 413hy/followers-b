@@ -795,6 +795,115 @@ def test_public_client_disambiguates_same_millisecond_limit_ladder_by_price() ->
     assert len({order.identity_key for order in page.orders}) == 2
 
 
+def test_public_client_disambiguates_same_millisecond_market_batch_by_price() -> None:
+    first = {
+        "symbol": "MUUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "positionSide": "SHORT",
+        "executedQty": "500",
+        "avgPrice": "945.0237202",
+        "totalPnl": "11609.85958536",
+        "orderTime": 1_784_906_149_137,
+        "orderUpdateTime": 1_784_906_149_138,
+    }
+    second = {
+        **first,
+        "executedQty": "66.19",
+        "avgPrice": "944.8998081",
+        "totalPnl": "1545.11495199",
+    }
+    third = {
+        **first,
+        "avgPrice": "944.7938122",
+        "totalPnl": "11724.81358537",
+    }
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [first, second, third], "total": 3}
+        )
+    )
+
+    page = client.order_history("5075281354358777856")
+
+    assert len(page.orders) == 3
+    assert len({order.identity_key for order in page.orders}) == 3
+
+
+def test_public_client_deduplicates_exact_repeated_order_row() -> None:
+    row = {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "positionSide": "LONG",
+        "executedQty": "1",
+        "avgPrice": "2000",
+        "totalPnl": "0",
+        "orderTime": 1_700_000_000_000,
+        "orderUpdateTime": 1_700_000_001_000,
+    }
+    client = BinancePublicCopyClient(
+        transport=lambda method, url, headers, body: _response(
+            {"list": [row, dict(row)], "total": 2}
+        )
+    )
+
+    page = client.order_history("5108371059752839168")
+
+    assert len(page.orders) == 1
+
+
+def test_catch_up_retries_one_transient_identity_collision_snapshot() -> None:
+    calls = 0
+    first = {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "positionSide": "LONG",
+        "executedQty": "1",
+        "avgPrice": "2000",
+        "totalPnl": "0",
+        "orderTime": 300,
+        "orderUpdateTime": 300,
+    }
+    ambiguous = {
+        **first,
+        "executedQty": "2",
+        "avgPrice": "2001",
+        "orderUpdateTime": 400,
+    }
+    watermark = {
+        **first,
+        "orderTime": 200,
+        "orderUpdateTime": 200,
+    }
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        nonlocal calls
+        del method, url, headers, body
+        calls += 1
+        rows = [first, ambiguous, watermark] if calls == 1 else [first, watermark]
+        return _response({"list": rows, "total": len(rows)})
+
+    page = BinancePublicCopyClient(
+        transport=transport,
+        sleeper=lambda _delay: None,
+    ).order_history_since(
+        "5108371059752839168",
+        after_update_time_ms=200,
+        page_size=100,
+        maximum_pages=1,
+    )
+
+    assert calls == 2
+    assert [order.update_time_ms for order in page.orders] == [200, 300]
+
+
 def test_limit_ladder_identity_is_stable_when_fill_quantity_changes() -> None:
     raw = {
         "symbol": "LABUSDT",
@@ -813,8 +922,8 @@ def test_limit_ladder_identity_is_stable_when_fill_quantity_changes() -> None:
         {**raw, "executedQty": "200", "orderUpdateTime": 1_700_000_002_000},
     )
 
-    partial = partial.with_identity_discriminator("LIMIT_AVG_PRICE:0.1417999")
-    complete = complete.with_identity_discriminator("LIMIT_AVG_PRICE:0.1417999")
+    partial = partial.with_identity_discriminator("LIMIT_BATCH_AVG_PRICE:0.1417999")
+    complete = complete.with_identity_discriminator("LIMIT_BATCH_AVG_PRICE:0.1417999")
 
     assert partial.identity_key == complete.identity_key
     assert partial.event_key != complete.event_key

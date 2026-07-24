@@ -540,7 +540,8 @@ class BinancePublicCopyClient:
             )
         except PublicCopyDataError as error:
             raise BinancePublicCopyError(str(error)) from error
-        orders = _disambiguate_limit_ladder_orders(orders)
+        orders = _deduplicate_exact_order_events(orders)
+        orders = _disambiguate_same_timestamp_batch_orders(orders)
         guarded_orders = (
             orders
             if identity_guard_after_ms is None
@@ -660,6 +661,34 @@ class BinancePublicCopyClient:
             raise ValueError("copy order-history watermark is invalid")
         if not 1 <= page_size <= 100 or not 1 <= maximum_pages <= 20:
             raise ValueError("copy order-history catch-up limit is invalid")
+        for attempt in range(self._retry_attempts):
+            try:
+                return self._order_history_since_snapshot(
+                    lead_portfolio_id,
+                    after_update_time_ms=after_update_time_ms,
+                    page_size=page_size,
+                    maximum_pages=maximum_pages,
+                )
+            except BinancePublicCopyError as error:
+                if (
+                    str(error) != "COPY_ORDER_IDENTITY_AMBIGUOUS"
+                    or attempt + 1 >= self._retry_attempts
+                ):
+                    raise
+                # The webpage endpoint has no snapshot token. A fill batch can be
+                # visible midway through an update, so retry the complete bounded
+                # catch-up before declaring a durable parser/identity fault.
+                self._retry(attempt)
+        raise AssertionError("unreachable public history retry state")
+
+    def _order_history_since_snapshot(
+        self,
+        lead_portfolio_id: str,
+        *,
+        after_update_time_ms: int,
+        page_size: int,
+        maximum_pages: int,
+    ) -> OrderHistoryPage:
         merged: dict[str, PublicLeaderOrder] = {}
         first_total = 0
         covered = False
@@ -806,15 +835,28 @@ def _leader_with_id(rows: list[object], lead_portfolio_id: str) -> LeaderSnapsho
     return None
 
 
-def _disambiguate_limit_ladder_orders(
+def _deduplicate_exact_order_events(
     orders: tuple[PublicLeaderOrder, ...],
 ) -> tuple[PublicLeaderOrder, ...]:
-    """Separate provably distinct same-millisecond LIMIT rows without guessing.
+    """Collapse byte-equivalent normalized rows repeated by the live webpage API."""
+
+    unique: dict[str, PublicLeaderOrder] = {}
+    for order in orders:
+        unique.setdefault(order.event_key, order)
+    return tuple(unique.values())
+
+
+def _disambiguate_same_timestamp_batch_orders(
+    orders: tuple[PublicLeaderOrder, ...],
+) -> tuple[PublicLeaderOrder, ...]:
+    """Separate provably distinct same-millisecond batch rows without guessing.
 
     The public endpoint has no order ID. Multiple rows with the same derived
-    identity in one current response cannot be cumulative snapshots of one order.
-    Distinct LIMIT average prices provide a stable ladder discriminator; every
-    other collision remains ambiguous and is rejected by the caller.
+    identity and different update timestamps can be cumulative snapshots of one
+    order and remain ambiguous. Distinct-price LIMIT ladder rows already have a
+    stable public discriminator. For MARKET orders, only rows that coexist at the
+    exact same update timestamp and have distinct average prices prove an atomic
+    batch. Every other collision remains rejected.
     """
 
     grouped: dict[str, list[int]] = defaultdict(list)
@@ -826,12 +868,19 @@ def _disambiguate_limit_ladder_orders(
             continue
         group = [orders[index] for index in indexes]
         prices = {order.average_price for order in group}
-        if any(order.order_type != "LIMIT" for order in group) or len(prices) != len(group):
+        update_times = {order.update_time_ms for order in group}
+        order_types = {order.order_type for order in group}
+        prices_are_unique = len(prices) == len(group)
+        is_limit_ladder = order_types == {"LIMIT"} and prices_are_unique
+        is_atomic_market_batch = (
+            order_types == {"MARKET"} and len(update_times) == 1 and prices_are_unique
+        )
+        if not (is_limit_ladder or is_atomic_market_batch):
             continue
         for index in indexes:
             order = orders[index]
             resolved[index] = order.with_identity_discriminator(
-                f"LIMIT_AVG_PRICE:{order.average_price}"
+                f"{order.order_type}_BATCH_AVG_PRICE:{order.average_price}"
             )
     return tuple(resolved)
 
