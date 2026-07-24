@@ -68,6 +68,7 @@ def test_telegram_environment_labels_are_explicit_and_validated() -> None:
         ("copy_leader_lock_change", "leaders"),
         ("copy_leader_symbol_stop_triggered", "positions"),
         ("copy_leader_availability_alert", None),
+        ("copy_leader_availability_recovered", None),
         ("copy_health", "health"),
         ("unknown", "status"),
     ],
@@ -140,16 +141,41 @@ def test_missing_current_leader_alert_is_explicit_and_has_no_inline_keyboard() -
         "lead_portfolio_id": "5078426407158237953",
         "nickname": "AI 的优势",
         "checked_at": "2026-07-24T01:10:00+00:00",
-        "reason_codes": ["COPY_LEADER_PUBLIC_PROJECT_MISSING"],
+        "source_status": "NOT_FOUND",
+        "reason_codes": ["COPY_LEADER_PUBLIC_PROJECT_NOT_FOUND"],
     }
 
     text = _notification_text(payload)
 
-    assert text.startswith("⚠️ 当前槽位的带单员已不在公开带单目录\n")
+    assert text.startswith("⚠️ 当前槽位的带单项目已不可用\n")
     assert "🎯 自定义 3" in text
     assert "AI 的优势 (ID 5078426407158237953)" in text
+    assert "按该 ID 直接查询" in text
+    assert "接口明确返回项目不存在" in text
     assert "仅发送本次提醒" in text
     assert "未清空或替换槽位, 未取消订单, 未处理任何仓位" in text
+    assert _notification_contextual_view(payload) is None
+
+
+def test_recovered_leader_status_corrects_previous_alert_without_inline_keyboard() -> None:
+    payload = {
+        "event": "copy_leader_availability_recovered",
+        "state": "AVAILABLE",
+        "source_status": "ACTIVE",
+        "slot": "SHORT_TERM_1",
+        "lead_portfolio_id": "5014426348046646785",
+        "nickname": "印钞机百分百胜率0回撤3号",
+        "checked_at": "2026-07-24T02:45:00+00:00",
+        "reason_codes": ["COPY_LEADER_PUBLIC_PROJECT_ACTIVE"],
+    }
+
+    text = _notification_text(payload)
+
+    assert text.startswith("✅ 带单项目状态已确认正常\n")
+    assert "⚡ 短线 1" in text
+    assert "印钞机百分百胜率0回撤3号 (ID 5014426348046646785)" in text
+    assert "已确认项目状态为 ACTIVE" in text
+    assert "槽位、订单和仓位从未被自动更改" in text
     assert _notification_contextual_view(payload) is None
 
 

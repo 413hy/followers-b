@@ -211,9 +211,7 @@ def main() -> int:
             slot=LeaderSlot.SHORT_TERM_1,
             lead_portfolio_id=source_leader.lead_portfolio_id,
             state="AVAILABLE",
-            public_directory_total=100,
-            valid_directory_total=100,
-            invalid_row_count=0,
+            source_status="ACTIVE",
             observed_at=availability_at,
         )
         is False
@@ -226,9 +224,7 @@ def main() -> int:
                     slot=LeaderSlot.SHORT_TERM_1,
                     lead_portfolio_id=source_leader.lead_portfolio_id,
                     state="MISSING",
-                    public_directory_total=100,
-                    valid_directory_total=99,
-                    invalid_row_count=0,
+                    source_status="NOT_FOUND",
                     observed_at=missing_at,
                 ),
                 range(8),
@@ -242,20 +238,16 @@ def main() -> int:
             slot=LeaderSlot.SHORT_TERM_1,
             lead_portfolio_id=source_leader.lead_portfolio_id,
             state="AVAILABLE",
-            public_directory_total=100,
-            valid_directory_total=100,
-            invalid_row_count=0,
+            source_status="ACTIVE",
             observed_at=recovered_availability_at,
         )
-        is False
+        is True
     )
     assert repository.record_leader_availability(
         slot=LeaderSlot.SHORT_TERM_1,
         lead_portfolio_id=source_leader.lead_portfolio_id,
         state="MISSING",
-        public_directory_total=100,
-        valid_directory_total=99,
-        invalid_row_count=0,
+        source_status="NOT_FOUND",
         observed_at=recovered_availability_at + timedelta(seconds=1),
     )
     assert (
@@ -263,9 +255,7 @@ def main() -> int:
             slot=LeaderSlot.LONG_TERM,
             lead_portfolio_id=source_leader.lead_portfolio_id,
             state="MISSING",
-            public_directory_total=100,
-            valid_directory_total=99,
-            invalid_row_count=0,
+            source_status="NOT_FOUND",
             observed_at=recovered_availability_at + timedelta(seconds=2),
         )
         is False
@@ -286,6 +276,13 @@ def main() -> int:
             (source_leader.lead_portfolio_id,),
         )
         assert cursor.fetchone() == (2,)
+        cursor.execute(
+            "SELECT count(*) FROM control.outbox "
+            "WHERE payload->>'event'='copy_leader_availability_recovered' "
+            "AND payload->>'lead_portfolio_id'=%s",
+            (source_leader.lead_portfolio_id,),
+        )
+        assert cursor.fetchone() == (1,)
     stale_multiplier_proposal = telegram.create_follow_multiplier_change(
         user_id=42,
         lead_portfolio_id=source_leader.lead_portfolio_id,
@@ -1132,16 +1129,22 @@ def main() -> int:
         long_candidate.lead_portfolio_id,
         leader.lead_portfolio_id,
     )
-    notifications = telegram.claim_notifications()
-    assert len(notifications) == 20, [item.text for item in notifications]
+    notifications = telegram.claim_notifications(limit=100)
+    assert len(notifications) >= 20, [item.text for item in notifications]
     availability_notifications = tuple(
         item
         for item in notifications
-        if "当前槽位的带单员已不在公开带单目录" in item.text
+        if "当前槽位的带单项目已不可用" in item.text
     )
     assert len(availability_notifications) == 2
     assert all(item.contextual_view is None for item in availability_notifications)
     assert all("未清空或替换槽位" in item.text for item in availability_notifications)
+    recovered_notifications = tuple(
+        item for item in notifications if "带单项目状态已确认正常" in item.text
+    )
+    assert len(recovered_notifications) == 1
+    assert recovered_notifications[0].contextual_view is None
+    assert "槽位、订单和仓位从未被自动更改" in recovered_notifications[0].text
     assert any("source integration leader" in item.text for item in notifications)
     assert any("database integration leader" in item.text for item in notifications)
     assert any("3倍" in item.text for item in notifications)

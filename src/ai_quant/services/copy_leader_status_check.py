@@ -13,20 +13,14 @@ from ai_quant.common.private_files import read_private_file
 from ai_quant.copy_trading.binance_public import (
     BinancePublicCopyClient,
     BinancePublicCopyError,
-    LeaderPage,
+    LeaderAvailability,
 )
 from ai_quant.copy_trading.leader_slots import LeaderSlot
 from ai_quant.copy_trading.repository import CopyTradingRepository
 
 
-class _PublicDirectory(Protocol):
-    def list_all_leaders(
-        self,
-        *,
-        time_range: str = "30D",
-        data_type: str = "ROI",
-        maximum_pages: int = 400,
-    ) -> LeaderPage: ...
+class _PublicLeaderDetails(Protocol):
+    def leader_availability(self, lead_portfolio_id: str) -> LeaderAvailability: ...
 
 
 class _AvailabilityRepository(Protocol):
@@ -38,9 +32,7 @@ class _AvailabilityRepository(Protocol):
         slot: LeaderSlot,
         lead_portfolio_id: str,
         state: str,
-        public_directory_total: int,
-        valid_directory_total: int,
-        invalid_row_count: int,
+        source_status: str,
         observed_at: datetime,
     ) -> bool: ...
 
@@ -71,10 +63,10 @@ def _private_text(path: Path, repository_root: Path) -> str:
 def run_status_check(
     *,
     repository: _AvailabilityRepository,
-    public: _PublicDirectory,
+    public: _PublicLeaderDetails,
     observed_at: datetime,
 ) -> dict[str, Any]:
-    """Check one complete public-directory snapshot without changing slot or trade state."""
+    """Check each assigned ID directly without changing slot or trade state."""
 
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
         raise ValueError("copy leader status check time must be timezone-aware")
@@ -90,39 +82,35 @@ def run_status_check(
             "alerts_created": 0,
         }
 
-    directory = public.list_all_leaders(
-        time_range="30D",
-        data_type="ROI",
-        maximum_pages=400,
-    )
-    valid_total = len(directory.leaders)
-    if directory.total <= 0 or valid_total <= 0:
-        raise BinancePublicCopyError("COPY_LEADER_STATUS_DIRECTORY_EMPTY")
-    # Binance has no snapshot token. If pages shifted enough to introduce duplicates,
-    # the scan cannot prove that an absent ID really disappeared and must fail closed.
-    if valid_total + directory.invalid_row_count < directory.total:
-        raise BinancePublicCopyError("COPY_LEADER_STATUS_DIRECTORY_INCOMPLETE")
-
-    available_ids = {leader.lead_portfolio_id for leader in directory.leaders}
-    invalid_ids = set(directory.invalid_leader_ids)
-    assigned_ids = set(assignments.values())
-    if assigned_ids & invalid_ids:
-        raise BinancePublicCopyError("COPY_LEADER_STATUS_ASSIGNED_ROW_INVALID")
+    # Fetch every unique ID before persisting anything. If one response is ambiguous,
+    # the run fails without leaving a partly updated daily snapshot or a false alert.
+    observations: dict[str, LeaderAvailability] = {}
+    for leader_id in sorted(set(assignments.values())):
+        evidence = public.leader_availability(leader_id)
+        if evidence.lead_portfolio_id != leader_id:
+            raise BinancePublicCopyError("COPY_LEADER_STATUS_IDENTITY_MISMATCH")
+        if evidence.state == "MISSING":
+            confirmation = public.leader_availability(leader_id)
+            if (
+                confirmation.lead_portfolio_id != leader_id
+                or confirmation.state != evidence.state
+                or confirmation.source_status != evidence.source_status
+            ):
+                raise BinancePublicCopyError("COPY_LEADER_STATUS_MISSING_UNCONFIRMED")
+        observations[leader_id] = evidence
 
     missing_count = 0
     alerts_created = 0
     slot_order = {slot: index for index, slot in enumerate(LeaderSlot)}
     for slot, leader_id in sorted(assignments.items(), key=lambda item: slot_order[item[0]]):
-        state = "AVAILABLE" if leader_id in available_ids else "MISSING"
-        if state == "MISSING":
+        evidence = observations[leader_id]
+        if evidence.state == "MISSING":
             missing_count += 1
         if repository.record_leader_availability(
             slot=slot,
             lead_portfolio_id=leader_id,
-            state=state,
-            public_directory_total=directory.total,
-            valid_directory_total=valid_total,
-            invalid_row_count=directory.invalid_row_count,
+            state=evidence.state,
+            source_status=evidence.source_status,
             observed_at=checked_at,
         ):
             alerts_created += 1
@@ -134,9 +122,8 @@ def run_status_check(
         "available_count": len(assignments) - missing_count,
         "missing_count": missing_count,
         "alerts_created": alerts_created,
-        "public_directory_total": directory.total,
-        "valid_directory_total": valid_total,
-        "invalid_row_count": directory.invalid_row_count,
+        "evidence_source": "DIRECT_LEADER_DETAIL",
+        "unique_leader_count": len(observations),
     }
 
 

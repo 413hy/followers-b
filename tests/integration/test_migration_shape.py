@@ -200,6 +200,19 @@ def test_leader_availability_is_durable_scoped_and_append_only() -> None:
     assert "reject_append_only_mutation" in migration
 
 
+def test_leader_availability_uses_direct_detail_evidence() -> None:
+    root = Path(__file__).resolve().parents[2]
+    migration = (
+        root / "migrations/business/versions/0034_direct_leader_status.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "0034_direct_leader_status"' in migration
+    assert 'down_revision = "0033_leader_availability"' in migration
+    assert "DIRECT_LEADER_DETAIL" in migration
+    assert "source_status" in migration
+    assert "NOT_FOUND" in migration
+
+
 def test_copy_source_resolution_epochs_are_append_only() -> None:
     root = Path(__file__).resolve().parents[2]
     migration = (

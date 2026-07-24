@@ -313,6 +313,19 @@ _LABELS = {
     "COPY_POLL_DELAYED": "带单员轮询延迟, 系统仍在运行但信号可能晚于正常周期",
     "COPY_PUBLIC_POLL_FAILURES": "所有带单员公开数据接口在本轮均读取失败",
     "COPY_PUBLIC_POLL_PARTIAL_FAILURE": "部分带单员读取失败, 其他带单员仍继续独立处理",
+    "COPY_LEADER_PUBLIC_PROJECT_ACTIVE": "按带单员 ID 直接查询后确认公开带单项目正常",
+    "COPY_LEADER_PUBLIC_PROJECT_CLOSING": "按带单员 ID 直接查询后确认公开带单项目正在关闭",
+    "COPY_LEADER_PUBLIC_PROJECT_CLOSED": "按带单员 ID 直接查询后确认公开带单项目已经关闭",
+    "COPY_LEADER_PUBLIC_PROJECT_NOT_FOUND": "按带单员 ID 直接查询后确认公开带单项目不存在",
+    "COPY_LEADER_DETAIL_INVALID_JSON": "Binance 带单详情接口返回内容无法解析, 本轮不会判断项目消失",
+    "COPY_LEADER_DETAIL_HTTP_400": "Binance 带单详情接口拒绝了请求, 但未明确证明项目不存在",
+    "COPY_LEADER_DETAIL_STATUS_UNKNOWN": "Binance 返回了未知带单项目状态, 本轮不会判断项目消失",
+    "COPY_LEADER_STATUS_IDENTITY_MISMATCH": (
+        "带单详情返回的 ID 与查询目标不一致, 本轮不会判断项目消失"
+    ),
+    "COPY_LEADER_STATUS_MISSING_UNCONFIRMED": (
+        "带单项目不可用结果未能连续复核一致, 本轮不会发送更换提醒"
+    ),
     "COPY_UNCERTAIN_SUBMISSIONS": (
         "存在 Binance 未明确返回结果的订单; 系统只核对原订单号, 不会重复下单"
     ),

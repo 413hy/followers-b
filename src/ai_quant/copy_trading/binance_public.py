@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from urllib.parse import urlencode
 
 from ai_quant.copy_trading.models import (
     LeaderSnapshot,
@@ -22,6 +23,7 @@ from ai_quant.copy_trading.models import (
 
 BINANCE_WEB_BASE = "https://www.binance.com"
 LEADER_LIST_PATH = "/bapi/futures/v1/friendly/future/copy-trade/home-page/query-list"
+LEADER_DETAIL_PATH = "/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/detail"
 ORDER_HISTORY_PATH = "/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/order-history"
 POSITION_HISTORY_PATH = (
     "/bapi/futures/v1/friendly/future/copy-trade/lead-portfolio/position-history"
@@ -49,6 +51,16 @@ class LeaderPage:
     invalid_row_count: int = 0
     invalid_reason_codes: tuple[str, ...] = ()
     invalid_leader_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderAvailability:
+    """Direct evidence returned by one public lead-portfolio detail lookup."""
+
+    lead_portfolio_id: str
+    state: str
+    source_status: str
+    nickname: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,11 +103,17 @@ def _urllib_transport(
     headers: Mapping[str, str],
     body: bytes,
 ) -> PublicHttpResult:
-    if method != "POST" or url not in {
+    allowed_post = method == "POST" and url in {
         f"{BINANCE_WEB_BASE}{LEADER_LIST_PATH}",
         f"{BINANCE_WEB_BASE}{ORDER_HISTORY_PATH}",
         f"{BINANCE_WEB_BASE}{POSITION_HISTORY_PATH}",
-    }:
+    }
+    allowed_get = method == "GET" and re.fullmatch(
+        re.escape(f"{BINANCE_WEB_BASE}{LEADER_DETAIL_PATH}")
+        + r"\?portfolioId=[0-9]{10,24}",
+        url,
+    )
+    if not (allowed_post or allowed_get):
         raise BinancePublicCopyError("COPY_PUBLIC_DESTINATION_DENIED")
     request = urllib.request.Request(  # noqa: S310 -- exact HTTPS URL allowlisted above
         url,
@@ -138,6 +156,65 @@ class BinancePublicCopyClient:
         self._transport = transport
         self._retry_attempts = retry_attempts
         self._sleeper = sleeper
+
+    def leader_availability(self, lead_portfolio_id: str) -> LeaderAvailability:
+        """Check one ID directly instead of inferring absence from a ranked directory."""
+
+        if not re.fullmatch(r"[0-9]{10,24}", lead_portfolio_id):
+            raise ValueError("copy leader portfolio ID is invalid")
+        query = urlencode({"portfolioId": lead_portfolio_id})
+        result = self._get_result(
+            f"{LEADER_DETAIL_PATH}?{query}",
+            "COPY_LEADER_DETAIL",
+        )
+        try:
+            response = json.loads(result.body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_INVALID_JSON") from error
+        if not isinstance(response, dict):
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_INVALID_RESPONSE")
+        if result.status == 400:
+            if (
+                response.get("success") is False
+                and response.get("code") == "000002"
+                and response.get("message") == "illegal parameter"
+                and response.get("data") is None
+            ):
+                return LeaderAvailability(
+                    lead_portfolio_id=lead_portfolio_id,
+                    state="MISSING",
+                    source_status="NOT_FOUND",
+                )
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_HTTP_400")
+        if not 200 <= result.status < 300:
+            raise BinancePublicCopyError(f"COPY_LEADER_DETAIL_HTTP_{result.status}")
+        if response.get("success") is not True or response.get("code") != "000000":
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_API_REJECTED")
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_INVALID_RESPONSE")
+        returned_id = data.get("leadPortfolioId")
+        status = data.get("status")
+        nickname = data.get("nickname")
+        if (
+            returned_id != lead_portfolio_id
+            or not isinstance(status, str)
+            or not isinstance(nickname, str)
+            or not nickname.strip()
+        ):
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_IDENTITY_INVALID")
+        if status == "ACTIVE":
+            state = "AVAILABLE"
+        elif status in {"CLOSING", "CLOSED"}:
+            state = "MISSING"
+        else:
+            raise BinancePublicCopyError("COPY_LEADER_DETAIL_STATUS_UNKNOWN")
+        return LeaderAvailability(
+            lead_portfolio_id=lead_portfolio_id,
+            state=state,
+            source_status=status,
+            nickname=nickname.strip(),
+        )
 
     def list_leaders(
         self,
@@ -671,6 +748,41 @@ class BinancePublicCopyClient:
             if not isinstance(data, dict):
                 raise BinancePublicCopyError(f"{operation}_INVALID_RESPONSE")
             return data
+        raise AssertionError("unreachable public copy retry state")
+
+    def _get_result(
+        self,
+        path: str,
+        operation: str,
+    ) -> PublicHttpResult:
+        for attempt in range(self._retry_attempts):
+            try:
+                result = self._transport(
+                    "GET",
+                    f"{BINANCE_WEB_BASE}{path}",
+                    {
+                        "Accept": "application/json",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                        "User-Agent": "aiq-copy-trading/1.0 (+public-data-poller)",
+                    },
+                    b"",
+                )
+            except BinancePublicCopyError as error:
+                if (
+                    str(error) == "COPY_PUBLIC_TRANSPORT_FAILED"
+                    and attempt + 1 < self._retry_attempts
+                ):
+                    self._retry(attempt)
+                    continue
+                raise
+            if result.status in {202, 401, 403}:
+                raise BinancePublicCopyError(f"{operation}_ACCESS_DENIED")
+            if (result.status == 429 or result.status >= 500) and (
+                attempt + 1 < self._retry_attempts
+            ):
+                self._retry(attempt)
+                continue
+            return result
         raise AssertionError("unreachable public copy retry state")
 
     def _retry(self, attempt: int) -> None:

@@ -3877,13 +3877,36 @@ def _notification_text_raw(
         nickname = _safe_text(str(payload.get("nickname", "名称未知")), 32)
         leader_id = _safe_text(str(payload.get("lead_portfolio_id", "UNKNOWN")), 24)
         checked_at = _display_shanghai_time(payload.get("checked_at"))
+        source_status = str(payload.get("source_status", "UNKNOWN"))
+        reason = {
+            "NOT_FOUND": "按该 ID 直接查询 Binance 带单详情时, 接口明确返回项目不存在",
+            "CLOSING": "按该 ID 直接查询 Binance 带单详情时, 项目状态明确为正在关闭",
+            "CLOSED": "按该 ID 直接查询 Binance 带单详情时, 项目状态明确为已关闭",
+        }.get(source_status, "按该 ID 直接查询 Binance 带单详情时, 项目已明确不可用")
         return (
-            "⚠️ 当前槽位的带单员已不在公开带单目录\n"
+            "⚠️ 当前槽位的带单项目已不可用\n"
             f"槽位: {slot_name}\n"
             f"带单员: {nickname} (ID {leader_id})\n"
-            "原因: Binance 完整公开带单目录已找不到该带单员, 其公开带单项目可能已停止\n"
+            f"原因: {reason}\n"
             "系统处理: 仅发送本次提醒; 未清空或替换槽位, 未取消订单, 未处理任何仓位\n"
             f"请在“带单员”页面手动更换 · 检查时间: {checked_at}"
+        )
+    if payload.get("event") == "copy_leader_availability_recovered":
+        slot_value = _safe_text(str(payload.get("slot", "UNKNOWN")), 16)
+        try:
+            slot_name = leader_slot_label(LeaderSlot(slot_value))
+        except ValueError:
+            slot_name = slot_value
+        nickname = _safe_text(str(payload.get("nickname", "名称未知")), 32)
+        leader_id = _safe_text(str(payload.get("lead_portfolio_id", "UNKNOWN")), 24)
+        checked_at = _display_shanghai_time(payload.get("checked_at"))
+        return (
+            "✅ 带单项目状态已确认正常\n"
+            f"槽位: {slot_name}\n"
+            f"带单员: {nickname} (ID {leader_id})\n"
+            "原因: 按该 ID 直接查询 Binance 带单详情, 已确认项目状态为 ACTIVE\n"
+            "系统处理: 已解除上一轮缺失判断; 槽位、订单和仓位从未被自动更改\n"
+            f"确认时间: {checked_at}"
         )
     if payload.get("event") == "copy_slot_selection":
         strategy = _safe_text(str(payload.get("strategy", "UNKNOWN")), 24)
@@ -4479,6 +4502,8 @@ def _notification_contextual_view(payload: Mapping[str, Any]) -> str | None:
     if payload.get("event") == "copy_pnl_reset":
         return None
     if payload.get("event") == "copy_leader_availability_alert":
+        return None
+    if payload.get("event") == "copy_leader_availability_recovered":
         return None
     if payload.get("event") == "copy_leader_symbol_stop_triggered":
         return "positions"

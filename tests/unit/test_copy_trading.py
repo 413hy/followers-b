@@ -9,6 +9,7 @@ import pytest
 
 from ai_quant.copy_trading.binance_public import (
     BINANCE_WEB_BASE,
+    LEADER_DETAIL_PATH,
     LEADER_LIST_PATH,
     ORDER_HISTORY_PATH,
     BinancePublicCopyClient,
@@ -48,6 +49,105 @@ def _leader() -> dict[str, Any]:
         "portfolioType": "PUBLIC",
         "sharpRatio": None,
     }
+
+
+def _leader_detail(
+    leader_id: str = "5014426348046646785",
+    *,
+    status: str = "ACTIVE",
+) -> dict[str, Any]:
+    return {
+        "leadPortfolioId": leader_id,
+        "nickname": "印钞机百分百胜率0回撤3号",
+        "status": status,
+    }
+
+
+def test_direct_leader_detail_distinguishes_active_id_from_nonexistent_id() -> None:
+    active_id = "5014426348046646785"
+    nonexistent_id = "9999999999999999999"
+    calls: list[tuple[str, str, bytes]] = []
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> PublicHttpResult:
+        del headers
+        calls.append((method, url, body))
+        if url.endswith(f"portfolioId={active_id}"):
+            return _response(_leader_detail(active_id))
+        return PublicHttpResult(
+            status=400,
+            headers={},
+            body=json.dumps(
+                {
+                    "success": False,
+                    "code": "000002",
+                    "message": "illegal parameter",
+                    "data": None,
+                }
+            ).encode(),
+        )
+
+    client = BinancePublicCopyClient(transport=transport)
+
+    active = client.leader_availability(active_id)
+    missing = client.leader_availability(nonexistent_id)
+
+    assert active.state == "AVAILABLE"
+    assert active.source_status == "ACTIVE"
+    assert active.nickname == "印钞机百分百胜率0回撤3号"
+    assert missing.state == "MISSING"
+    assert missing.source_status == "NOT_FOUND"
+    assert calls == [
+        (
+            "GET",
+            f"{BINANCE_WEB_BASE}{LEADER_DETAIL_PATH}?portfolioId={active_id}",
+            b"",
+        ),
+        (
+            "GET",
+            f"{BINANCE_WEB_BASE}{LEADER_DETAIL_PATH}?portfolioId={nonexistent_id}",
+            b"",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("status", ["CLOSING", "CLOSED"])
+def test_direct_leader_detail_accepts_only_explicit_terminal_status_as_missing(
+    status: str,
+) -> None:
+    leader_id = "5014426348046646785"
+
+    def transport(*args: Any) -> PublicHttpResult:
+        return _response(_leader_detail(leader_id, status=status))
+
+    evidence = BinancePublicCopyClient(transport=transport).leader_availability(leader_id)
+
+    assert evidence.state == "MISSING"
+    assert evidence.source_status == status
+
+
+@pytest.mark.parametrize(
+    ("data", "error"),
+    [
+        (_leader_detail("5107141548334007552"), "IDENTITY_INVALID"),
+        (_leader_detail(status="PAUSED"), "STATUS_UNKNOWN"),
+    ],
+)
+def test_ambiguous_direct_leader_detail_fails_closed_without_missing_evidence(
+    data: dict[str, Any],
+    error: str,
+) -> None:
+    def transport(*args: Any) -> PublicHttpResult:
+        return _response(data)
+
+    with pytest.raises(BinancePublicCopyError, match=error):
+        BinancePublicCopyClient(transport=transport).leader_availability(
+            "5014426348046646785"
+        )
 
 
 def _order(

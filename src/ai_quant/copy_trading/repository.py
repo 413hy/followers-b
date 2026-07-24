@@ -577,39 +577,37 @@ class CopyTradingRepository:
         slot: LeaderSlot,
         lead_portfolio_id: str,
         state: str,
-        public_directory_total: int,
-        valid_directory_total: int,
-        invalid_row_count: int,
+        source_status: str,
         observed_at: datetime,
     ) -> bool:
-        """Record one status observation and enqueue only the first alert in a missing episode."""
+        """Record direct detail evidence and notify only on availability transitions."""
 
         _require_utc(observed_at)
         if (
             not re.fullmatch(r"[0-9]{10,24}", lead_portfolio_id)
             or state not in {"AVAILABLE", "MISSING"}
-            or public_directory_total <= 0
-            or valid_directory_total < 0
-            or invalid_row_count < 0
+            or source_status not in {"ACTIVE", "CLOSING", "CLOSED", "NOT_FOUND"}
+            or (state == "AVAILABLE") != (source_status == "ACTIVE")
         ):
             raise ValueError("copy leader availability observation is invalid")
-        reason_codes = (
-            ["COPY_LEADER_PUBLIC_PROJECT_AVAILABLE"]
-            if state == "AVAILABLE"
-            else ["COPY_LEADER_PUBLIC_PROJECT_MISSING"]
-        )
+        reason_code = {
+            "ACTIVE": "COPY_LEADER_PUBLIC_PROJECT_ACTIVE",
+            "CLOSING": "COPY_LEADER_PUBLIC_PROJECT_CLOSING",
+            "CLOSED": "COPY_LEADER_PUBLIC_PROJECT_CLOSED",
+            "NOT_FOUND": "COPY_LEADER_PUBLIC_PROJECT_NOT_FOUND",
+        }[source_status]
+        reason_codes = [reason_code]
         evidence = {
             "slot": slot.value,
             "lead_portfolio_id": lead_portfolio_id,
             "state": state,
-            "public_directory_total": public_directory_total,
-            "valid_directory_total": valid_directory_total,
-            "invalid_row_count": invalid_row_count,
+            "evidence_source": "DIRECT_LEADER_DETAIL",
+            "source_status": source_status,
             "reason_codes": reason_codes,
             "observed_at": observed_at.isoformat(),
         }
         event_id = _digest(evidence)
-        alert_created = False
+        notification_created = False
         try:
             with self._connect() as connection, connection.cursor() as cursor:
                 # Serialize against Telegram and selector slot changes. A leader that was
@@ -650,8 +648,8 @@ class CopyTradingRepository:
                     INSERT INTO copytrading.leader_availability_events(
                       availability_event_id,slot,lead_portfolio_id,state,
                       public_directory_total,valid_directory_total,invalid_row_count,
-                      reason_codes,evidence_hash,observed_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      evidence_source,source_status,reason_codes,evidence_hash,observed_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT DO NOTHING
                     """,
                     (
@@ -659,25 +657,42 @@ class CopyTradingRepository:
                         slot.value,
                         lead_portfolio_id,
                         state,
-                        public_directory_total,
-                        valid_directory_total,
-                        invalid_row_count,
+                        1,
+                        1 if state == "AVAILABLE" else 0,
+                        0,
+                        "DIRECT_LEADER_DETAIL",
+                        source_status,
                         Jsonb(reason_codes),
                         _digest(evidence),
                         observed_at,
                     ),
                 )
-                if state != "MISSING" or previous_state == "MISSING":
+                if previous_state == state or (
+                    previous_state is None and state == "AVAILABLE"
+                ):
                     return False
-                payload = {
-                    "event": "copy_leader_availability_alert",
-                    "state": "MISSING",
-                    "slot": slot.value,
-                    "lead_portfolio_id": lead_portfolio_id,
-                    "nickname": _leader_nickname(cursor, lead_portfolio_id),
-                    "checked_at": observed_at.isoformat(),
-                    "reason_codes": reason_codes,
-                }
+                if state == "MISSING":
+                    payload = {
+                        "event": "copy_leader_availability_alert",
+                        "state": "MISSING",
+                        "source_status": source_status,
+                        "slot": slot.value,
+                        "lead_portfolio_id": lead_portfolio_id,
+                        "nickname": _leader_nickname(cursor, lead_portfolio_id),
+                        "checked_at": observed_at.isoformat(),
+                        "reason_codes": reason_codes,
+                    }
+                else:
+                    payload = {
+                        "event": "copy_leader_availability_recovered",
+                        "state": "AVAILABLE",
+                        "source_status": source_status,
+                        "slot": slot.value,
+                        "lead_portfolio_id": lead_portfolio_id,
+                        "nickname": _leader_nickname(cursor, lead_portfolio_id),
+                        "checked_at": observed_at.isoformat(),
+                        "reason_codes": reason_codes,
+                    }
                 cursor.execute(
                     """
                     INSERT INTO control.outbox(
@@ -686,16 +701,16 @@ class CopyTradingRepository:
                     ON CONFLICT (deduplication_key) DO NOTHING
                     """,
                     (
-                        _digest({"leader_availability_alert": event_id}),
-                        f"copy-leader-availability-alert:{event_id}",
+                        _digest({"leader_availability_notification": event_id}),
+                        f"copy-leader-availability-notification:{event_id}",
                         Jsonb(payload),
                         _digest(payload),
                     ),
                 )
-                alert_created = cursor.rowcount == 1
+                notification_created = cursor.rowcount == 1
         except psycopg.Error as error:
             raise CopyRepositoryError("COPY_LEADER_AVAILABILITY_WRITE_FAILED") from error
-        return alert_created
+        return notification_created
 
     def current_locked_leader_ids(self) -> frozenset[str]:
         try:
