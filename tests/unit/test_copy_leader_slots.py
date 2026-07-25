@@ -25,9 +25,9 @@ def test_long_and_short_selectors_share_a_whole_run_lock() -> None:
         assert "ExecStart=/usr/bin/flock --exclusive --wait 1200 " in text
         assert "/run/ai-quant-copy-selection.lock " in text
         assert "TimeoutStartSec=2400" in text
-        assert "StartLimitIntervalSec=60" in text
-        assert "StartLimitBurst=10" in text
-        assert "StartLimitIntervalSec=3600" not in text
+        assert "StartLimitIntervalSec=3600" in text
+        assert "StartLimitBurst=4" in text
+        assert "RestartSec=300" in text
 
 
 def test_daily_leader_status_check_is_persistent_read_only_and_offset_from_selection() -> None:

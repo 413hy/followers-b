@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,11 +18,13 @@ from ai_quant.copy_trading.codex_model import (
 from ai_quant.copy_trading.codex_repair import CodexSystemRepairer
 from ai_quant.services.copy_codex_audit import (
     _RECENT_LEADER_POLL_FAILURES_SQL,
+    _RECENT_SELECTION_FAILURES_SQL,
     _RECENT_SIGNAL_ERRORS_SQL,
     _audit_fault_evidence_changed,
     _audit_with_publication_fence,
     _pause_new_entries_justified,
     _reconciliation_status,
+    _start_repair,
 )
 
 NOW = datetime(2026, 7, 19, 1, 39, tzinfo=UTC)
@@ -31,6 +34,41 @@ def test_completed_codex_audit_prevents_repeat_signal_error_alerts() -> None:
     assert "audit.findings->'reviewed_signal_ids'" in _RECENT_SIGNAL_ERRORS_SQL
     assert "audit.findings ? 'codex'" in _RECENT_SIGNAL_ERRORS_SQL
     assert "NOT (audit.findings ? 'reviewed_signal_ids')" in _RECENT_SIGNAL_ERRORS_SQL
+
+
+def test_completed_codex_audit_prevents_repeat_selection_failure_alerts() -> None:
+    assert "selection_run_id" in _RECENT_SELECTION_FAILURES_SQL
+    assert "audit.findings->'reviewed_selection_run_ids'" in (
+        _RECENT_SELECTION_FAILURES_SQL
+    )
+    assert "audit.findings ? 'codex'" in _RECENT_SELECTION_FAILURES_SQL
+    assert "NOT (audit.findings ? 'reviewed_selection_run_ids')" in (
+        _RECENT_SELECTION_FAILURES_SQL
+    )
+
+
+def test_codex_repair_request_serializes_decimal_health_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_file = tmp_path / "repair-request.json"
+
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "ai_quant.services.copy_codex_audit._REPAIR_REQUEST",
+        request_file,
+    )
+    monkeypatch.setattr(
+        "ai_quant.services.copy_codex_audit.subprocess.run",
+        lambda *args, **kwargs: Result(),
+    )
+
+    assert _start_repair({"facts": {"maximum_poll_age_seconds": Decimal("1.25")}})
+    assert json.loads(request_file.read_text(encoding="utf-8")) == {
+        "facts": {"maximum_poll_age_seconds": "1.25"}
+    }
 
 
 def test_codex_audit_reads_exact_latest_failure_for_each_active_leader() -> None:

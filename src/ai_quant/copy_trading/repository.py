@@ -1528,6 +1528,7 @@ class CopyTradingRepository:
         *,
         scheduled_for: datetime,
         reason_code: str,
+        reason_codes: tuple[str, ...] | None = None,
         occurred_at: datetime,
         strategy: SelectionStrategy | None = None,
     ) -> str:
@@ -1535,10 +1536,18 @@ class CopyTradingRepository:
             _require_utc(value)
         if not reason_code or len(reason_code) > 120:
             raise ValueError("copy selection failure reason is invalid")
+        failure_reasons = tuple(dict.fromkeys(reason_codes or (reason_code,)))
+        if (
+            not failure_reasons
+            or failure_reasons[0] != reason_code
+            or len(failure_reasons) > 12
+            or any(not value or len(value) > 120 for value in failure_reasons)
+        ):
+            raise ValueError("copy selection failure evidence is invalid")
         selection_kind = strategy.value if strategy is not None else "LEGACY"
         digest = _digest(
             {
-                "reason_code": reason_code,
+                "reason_codes": failure_reasons,
                 "scheduled_for": scheduled_for.isoformat(),
                 "strategy": selection_kind,
                 "type": "daily-copy-leader-selection-failure",
@@ -1548,7 +1557,7 @@ class CopyTradingRepository:
             "event": "copy_system",
             "state": f"{selection_kind}_SELECTION_FAILED",
             "strategy": selection_kind,
-            "reason_codes": [reason_code],
+            "reason_codes": list(failure_reasons),
             "summary": f"{selection_kind} 带单员选择失败并将自动重试: {reason_code}",
             "occurred_at": occurred_at.isoformat(),
         }
@@ -1567,9 +1576,9 @@ class CopyTradingRepository:
                         digest,
                         scheduled_for,
                         occurred_at,
-                        _digest({"failure": reason_code}),
+                        _digest({"failure": failure_reasons}),
                         _digest({"policy": "selection-failure"}),
-                        Jsonb([reason_code]),
+                        Jsonb(list(failure_reasons)),
                         occurred_at,
                         selection_kind,
                     ),

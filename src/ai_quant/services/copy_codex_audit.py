@@ -125,6 +125,31 @@ SELECT active.lead_portfolio_id,poll.state,poll.reason_codes,poll.occurred_at,
  ORDER BY poll.occurred_at DESC,active.lead_portfolio_id
  LIMIT 8
 """
+_RECENT_SELECTION_FAILURES_SQL = """
+WITH latest AS (
+  SELECT DISTINCT ON (selection_kind)
+         selection_run_id,selection_kind,state,reason_codes,occurred_at
+    FROM copytrading.selection_runs
+   ORDER BY selection_kind,occurred_at DESC,selection_run_id DESC
+)
+SELECT selection_run_id,selection_kind,reason_codes,occurred_at
+  FROM latest
+ WHERE state='FAILED' AND occurred_at >= %s
+   AND NOT EXISTS (
+     SELECT 1
+       FROM copytrading.health_check_runs AS audit
+      WHERE audit.check_kind='CODEX_AUDIT'
+        AND audit.findings ? 'codex'
+        AND (
+          (audit.findings->'reviewed_selection_run_ids') ? latest.selection_run_id::text
+          OR (
+            NOT (audit.findings ? 'reviewed_selection_run_ids')
+            AND audit.occurred_at >= latest.occurred_at
+          )
+        )
+   )
+ ORDER BY occurred_at DESC,selection_kind
+"""
 
 
 def _arguments() -> argparse.Namespace:
@@ -171,7 +196,14 @@ def _start_repair(request: dict[str, Any]) -> bool:
     _REPAIR_REQUEST.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = _REPAIR_REQUEST.with_suffix(".tmp")
     temporary.write_text(
-        json.dumps(request, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        json.dumps(
+            request,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            default=str,
+        )
+        + "\n",
         encoding="utf-8",
     )
     os.chmod(temporary, 0o600)
@@ -535,24 +567,11 @@ def _recent_selection_failures(
 
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                WITH latest AS (
-                  SELECT DISTINCT ON (selection_kind)
-                         selection_kind,state,reason_codes,occurred_at
-                    FROM copytrading.selection_runs
-                   ORDER BY selection_kind,occurred_at DESC,selection_run_id DESC
-                )
-                SELECT selection_kind,reason_codes,occurred_at
-                  FROM latest
-                 WHERE state='FAILED' AND occurred_at >= %s
-                 ORDER BY occurred_at DESC,selection_kind
-                """,
-                (now - timedelta(hours=2),),
-            )
+            cursor.execute(_RECENT_SELECTION_FAILURES_SQL, (now - timedelta(hours=2),))
             rows = list(cursor.fetchall())
     return [
         {
+            "selection_run_id": str(row["selection_run_id"]),
             "selection_kind": str(row["selection_kind"])[:24],
             "reason_codes": (
                 [str(value)[:120] for value in row["reason_codes"][:6]]
@@ -690,6 +709,7 @@ def _persist(
     occurred_at: datetime,
     applied_actions: list[str],
     reviewed_signal_ids: list[str],
+    reviewed_selection_run_ids: list[str],
 ) -> str:
     status = str(document["status"])
     state = {
@@ -701,6 +721,7 @@ def _persist(
         "codex": document,
         "applied_actions": applied_actions,
         "reviewed_signal_ids": reviewed_signal_ids,
+        "reviewed_selection_run_ids": reviewed_selection_run_ids,
     }
     run_id = hashlib.sha256(
         f"CODEX_AUDIT:{report_digest}:{occurred_at.isoformat()}".encode()
@@ -912,6 +933,10 @@ def main() -> int:
         occurred_at=now,
         applied_actions=applied,
         reviewed_signal_ids=[str(error["signal_id"]) for error in recent_signal_errors],
+        reviewed_selection_run_ids=[
+            str(failure["selection_run_id"])
+            for failure in sanitized["recent_selection_failures"]
+        ],
     )
     _persist_resolved_incidents(
         database_url,

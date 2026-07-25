@@ -4,10 +4,10 @@ After=network-online.target aiq-copy-migrations.service
 Wants=network-online.target
 Requires=aiq-copy-migrations.service
 OnFailure=aiq-copy-incident-reporter@%n.service
-# This oneshot is invoked by the weekly timer, incident recovery and explicit operator
-# reviews. Successful reviews must not exhaust an hour-wide failure budget.
-StartLimitIntervalSec=60
-StartLimitBurst=10
+# Retry a failed weekly selection at most three times after its initial attempt.
+# This bounds both dependency load and duplicate incident noise within the hour.
+StartLimitIntervalSec=3600
+StartLimitBurst=4
 
 [Service]
 Type=oneshot

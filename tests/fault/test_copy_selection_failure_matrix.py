@@ -14,8 +14,10 @@ import pytest
 
 from ai_quant.copy_trading.binance_public import (
     BinancePublicCopyError,
+    ClosedLeaderPosition,
     LeaderPage,
     OrderHistoryPage,
+    PositionHistoryPage,
 )
 from ai_quant.copy_trading.codex_selection import (
     CodexDailySelector,
@@ -23,7 +25,11 @@ from ai_quant.copy_trading.codex_selection import (
     CodexSelectionResult,
 )
 from ai_quant.copy_trading.leader_slots import LeaderSlot
-from ai_quant.copy_trading.models import LeaderSnapshot, PublicLeaderOrder
+from ai_quant.copy_trading.models import (
+    LeaderSnapshot,
+    PublicLeaderOrder,
+    SourcePositionSide,
+)
 from ai_quant.services import copy_leader_selector as service
 
 
@@ -44,7 +50,11 @@ def _leader(index: int) -> LeaderSnapshot:
     )
 
 
-def _quality_orders(leader_id: str) -> tuple[PublicLeaderOrder, ...]:
+def _quality_orders(
+    leader_id: str,
+    *,
+    position_side: str = "LONG",
+) -> tuple[PublicLeaderOrder, ...]:
     now = datetime.now(UTC)
     orders: list[PublicLeaderOrder] = []
     for index in range(36):
@@ -61,7 +71,7 @@ def _quality_orders(leader_id: str) -> tuple[PublicLeaderOrder, ...]:
                         "symbol": "ETHUSDT",
                         "side": side,
                         "type": "MARKET",
-                        "positionSide": "LONG",
+                        "positionSide": position_side,
                         "executedQty": "1",
                         "avgPrice": "2000",
                         "totalPnl": pnl,
@@ -71,6 +81,131 @@ def _quality_orders(leader_id: str) -> tuple[PublicLeaderOrder, ...]:
                 )
             )
     return tuple(orders)
+
+
+def test_long_selection_resolves_one_way_candidate_before_quality_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leader = _leader(1)
+    orders = _quality_orders(leader.lead_portfolio_id, position_side="BOTH")
+    selected: list[str] = []
+
+    class Public:
+        def list_all_leaders(self, **kwargs: Any) -> LeaderPage:
+            return LeaderPage(leaders=(leader,), total=1)
+
+        def order_history(self, leader_id: str, **kwargs: Any) -> OrderHistoryPage:
+            assert leader_id == leader.lead_portfolio_id
+            return OrderHistoryPage(orders=orders, total=len(orders))
+
+        def position_history(self, leader_id: str, **kwargs: Any) -> PositionHistoryPage:
+            assert leader_id == leader.lead_portfolio_id
+            return PositionHistoryPage(
+                positions=(
+                    ClosedLeaderPosition(
+                        symbol="ETHUSDT",
+                        position_side=SourcePositionSide.LONG,
+                        opened_at_ms=min(order.order_time_ms for order in orders) - 1,
+                        closed_at_ms=max(order.update_time_ms for order in orders) + 1,
+                        maximum_open_quantity=Decimal("36"),
+                        closed_quantity=Decimal("36"),
+                    ),
+                ),
+                total=1,
+            )
+
+    class Catalog:
+        def trading_symbols(self) -> frozenset[str]:
+            return frozenset({"ETHUSDT"})
+
+    class Repository:
+        def __init__(self, dsn: str) -> None:
+            assert dsn.startswith("postgresql://")
+
+        def current_slot_assignments(self) -> dict[LeaderSlot, str]:
+            return {}
+
+        def current_locked_leader_ids(self) -> frozenset[str]:
+            return frozenset()
+
+        def recently_manually_cleared_leader_ids(self, **kwargs: Any) -> frozenset[str]:
+            return frozenset()
+
+        def leader_selection_trend(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def record_leader_snapshot(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def record_candidate_activity(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def apply_slot_selection(
+            self,
+            candidates: tuple[LeaderSnapshot, ...],
+            assessments: dict[str, Any],
+            selected_leader_ids: tuple[str, ...],
+            **kwargs: Any,
+        ) -> str:
+            del candidates, kwargs
+            assert assessments[leader.lead_portfolio_id].eligible
+            selected.extend(selected_leader_ids)
+            return "a" * 64
+
+    class Selector:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def select(
+            self,
+            candidates: tuple[dict[str, object], ...],
+            *,
+            leader_count: int,
+            strategy: str,
+        ) -> CodexSelectionResult:
+            assert leader_count == 1
+            assert strategy == "LONG_TERM"
+            recent_orders = candidates[0]["recent_public_orders"]
+            assert isinstance(recent_orders, dict)
+            assert recent_orders["ambiguous_position_side_count"] == 0
+            return CodexSelectionResult(
+                selected_leader_ids=(leader.lead_portfolio_id,),
+                document={"selected_leader_ids": [leader.lead_portfolio_id]},
+                candidate_digest="b" * 64,
+                report_digest="c" * 64,
+            )
+
+    monkeypatch.setattr(service, "BinancePublicCopyClient", Public)
+    monkeypatch.setattr(service, "BinanceTestnetCatalogClient", Catalog)
+    monkeypatch.setattr(service, "CopyTradingRepository", Repository)
+    monkeypatch.setattr(service, "CodexDailySelector", Selector)
+    database_file = tmp_path / "database-url"
+    database_file.write_text("postgresql://local/test", encoding="utf-8")
+    os.chmod(database_file, 0o400)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("test: true\n", encoding="utf-8")
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text("{}", encoding="utf-8")
+
+    evidence = service.run_selection(
+        argparse.Namespace(
+            database_url_file=database_file,
+            repository_root=Path("/root/quantify/ai-quant-system"),
+            config_file=config_file,
+            schema_file=schema_file,
+            work_root=tmp_path / "work",
+            evidence_file=tmp_path / "evidence.json",
+            environment="TESTNET",
+            leader_count=1,
+            candidate_pool_size=20,
+            review_pool_size=3,
+            strategy="LONG_TERM",
+        )
+    )
+
+    assert selected == [leader.lead_portfolio_id]
+    assert evidence["eligible_count"] == 1
 
 
 def test_candidate_directory_uses_full_public_directory_and_follower_first_order(
@@ -165,6 +300,30 @@ def test_manual_clear_cooldown_ends_on_next_shanghai_day() -> None:
     assert service._manual_clear_cooldown_start(
         datetime(2026, 7, 20, 17, 2, tzinfo=UTC)
     ) == datetime(2026, 7, 20, 16, 0, tzinfo=UTC)
+
+
+def test_only_testnet_long_selection_uses_relaxed_symbol_compatibility() -> None:
+    assert (
+        service._minimum_symbol_compatibility(
+            service.SelectionStrategy.LONG_TERM,
+            environment="TESTNET",
+        )
+        == 0.6
+    )
+    assert (
+        service._minimum_symbol_compatibility(
+            service.SelectionStrategy.SHORT_TERM,
+            environment="TESTNET",
+        )
+        == 0.8
+    )
+    assert (
+        service._minimum_symbol_compatibility(
+            service.SelectionStrategy.LONG_TERM,
+            environment="PRODUCTION",
+        )
+        == 0.8
+    )
 
 
 def test_short_selection_splits_highest_win_rate_and_intraday_composite(

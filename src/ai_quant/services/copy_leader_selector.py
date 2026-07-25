@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess  # nosec B404 -- fixed systemctl path and unit
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,7 @@ from ai_quant.copy_trading.codex_selection import (
 )
 from ai_quant.copy_trading.leader_slots import CandidateActivity, LeaderSlot, SelectionStrategy
 from ai_quant.copy_trading.models import LeaderSnapshot
+from ai_quant.copy_trading.one_way import OneWayResolutionError, resolve_one_way_orders
 from ai_quant.copy_trading.repository import CopyTradingRepository
 from ai_quant.copy_trading.selection import CandidateAssessment, SelectionPolicy, assess_candidate
 from ai_quant.copy_trading.selection_quality import (
@@ -61,6 +63,21 @@ class _CandidateDirectory:
     public_total: int
     valid_total: int
     invalid_row_count: int
+
+
+class _SelectionPoolError(RuntimeError):
+    """A shortage with the exact candidate-stage rejection evidence attached."""
+
+    def __init__(self, reason_code: str, rejection_codes: Counter[str]) -> None:
+        super().__init__(reason_code)
+        self.reason_codes = (
+            reason_code,
+            *(
+                code
+                for code, _count in rejection_codes.most_common(10)
+                if code != reason_code
+            ),
+        )
 
 
 def _trigger_codex_audit() -> bool:
@@ -150,6 +167,20 @@ def _objectives(strategy: SelectionStrategy) -> tuple[str, ...]:
     if strategy is SelectionStrategy.LONG_TERM:
         return (LONG_TERM,)
     return (SHORT_TERM_WIN_RATE, SHORT_TERM_INTRADAY)
+
+
+def _minimum_symbol_compatibility(
+    strategy: SelectionStrategy,
+    *,
+    environment: str,
+) -> float:
+    """Keep Testnet's smaller catalog from vetoing an otherwise sound long leader."""
+
+    return (
+        0.6
+        if environment == "TESTNET" and strategy is SelectionStrategy.LONG_TERM
+        else 0.8
+    )
 
 
 def _candidate_directory(
@@ -333,6 +364,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
         reverse=True,
     )
     profiled: list[_ProfiledCandidate] = []
+    profile_rejection_codes: Counter[str] = Counter()
     for leader in review_candidates:
         try:
             history = public.order_history(leader.lead_portfolio_id, page_size=100)
@@ -347,11 +379,35 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
                     str(error),
                 ),
             )
+            profile_rejection_codes.update(assessments[leader.lead_portfolio_id].reason_codes)
             continue
-        profile = CandidateOrderProfile.from_orders(
-            history.orders,
-            observed_at_ms=observed_at_ms,
-        )
+        orders = history.orders
+        if any(order.position_side.value == "BOTH" for order in orders):
+            try:
+                position_history = public.position_history(
+                    leader.lead_portfolio_id,
+                    page_size=100,
+                )
+                orders = resolve_one_way_orders(
+                    orders,
+                    closed_positions=position_history.positions,
+                )
+            except (BinancePublicCopyError, OneWayResolutionError) as error:
+                previous = assessments[leader.lead_portfolio_id]
+                assessments[leader.lead_portfolio_id] = CandidateAssessment(
+                    lead_portfolio_id=previous.lead_portfolio_id,
+                    eligible=False,
+                    deterministic_score=previous.deterministic_score,
+                    reason_codes=(
+                        "COPY_SELECTION_ONE_WAY_EVIDENCE_UNRESOLVED",
+                        str(error),
+                    ),
+                )
+                profile_rejection_codes.update(
+                    assessments[leader.lead_portfolio_id].reason_codes
+                )
+                continue
+        profile = CandidateOrderProfile.from_orders(orders, observed_at_ms=observed_at_ms)
         if profile.ambiguous_position_side_count:
             previous = assessments[leader.lead_portfolio_id]
             assessments[leader.lead_portfolio_id] = CandidateAssessment(
@@ -360,6 +416,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
                 deterministic_score=previous.deterministic_score,
                 reason_codes=("COPY_SELECTION_POSITION_SIDE_AMBIGUOUS",),
             )
+            profile_rejection_codes.update(assessments[leader.lead_portfolio_id].reason_codes)
             continue
         compatible_symbol_count = sum(
             symbol in execution_trading_symbols for symbol in profile.symbols
@@ -379,7 +436,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             testnet_symbol_compatibility_pct=int(compatibility * 100),
         )
         repository.record_candidate_activity(activity)
-        if compatibility < 0.8:
+        if compatibility < _minimum_symbol_compatibility(
+            strategy,
+            environment=environment,
+        ):
             previous = assessments[leader.lead_portfolio_id]
             assessments[leader.lead_portfolio_id] = CandidateAssessment(
                 lead_portfolio_id=previous.lead_portfolio_id,
@@ -387,6 +447,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
                 deterministic_score=previous.deterministic_score,
                 reason_codes=("COPY_SELECTION_EXECUTION_SYMBOL_COMPATIBILITY_LOW",),
             )
+            profile_rejection_codes.update(assessments[leader.lead_portfolio_id].reason_codes)
             continue
         objective_quality = {
             objective: assess_selection_quality(
@@ -416,6 +477,7 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
                 deterministic_score=max(quality.score for quality in objective_quality.values()),
                 reason_codes=quality_reasons,
             )
+            profile_rejection_codes.update(quality_reasons)
             continue
         objective_score = max(quality.score for quality in eligible_quality)
         assessments[leader.lead_portfolio_id] = CandidateAssessment(
@@ -499,7 +561,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             short_1_pool.sort(key=_short_win_rate_key, reverse=True)
             short_1_reviewed = short_1_pool[: arguments.review_pool_size]
             if not short_1_reviewed:
-                raise RuntimeError("COPY_SELECTION_SHORT_WIN_RATE_POOL_INSUFFICIENT")
+                raise _SelectionPoolError(
+                    "COPY_SELECTION_SHORT_WIN_RATE_POOL_INSUFFICIENT",
+                    profile_rejection_codes,
+                )
             short_1_result = selector.select(
                 tuple(item.document for item in short_1_reviewed),
                 leader_count=1,
@@ -572,7 +637,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             )
             short_2_reviewed = short_2_pool[: arguments.review_pool_size]
             if not short_2_reviewed:
-                raise RuntimeError("COPY_SELECTION_SHORT_INTRADAY_POOL_INSUFFICIENT")
+                raise _SelectionPoolError(
+                    "COPY_SELECTION_SHORT_INTRADAY_POOL_INSUFFICIENT",
+                    profile_rejection_codes,
+                )
             short_2_result = selector.select(
                 tuple(item.document for item in short_2_reviewed),
                 leader_count=1,
@@ -694,7 +762,10 @@ def run_selection(arguments: argparse.Namespace) -> dict[str, Any]:
             )
             reviewed = profiled[: arguments.review_pool_size]
             if len(reviewed) < arguments.leader_count:
-                raise RuntimeError("COPY_SELECTION_ELIGIBLE_POOL_INSUFFICIENT")
+                raise _SelectionPoolError(
+                    "COPY_SELECTION_ELIGIBLE_POOL_INSUFFICIENT",
+                    profile_rejection_codes,
+                )
             long_result = selector.select(
                 tuple(item.document for item in reviewed),
                 leader_count=arguments.leader_count,
@@ -779,6 +850,11 @@ def main() -> int:
             if re.fullmatch(r"[A-Z0-9_]{3,120}", raw_reason)
             else f"COPY_SELECTION_{type(error).__name__.upper()}"
         )
+        reason_codes = (
+            error.reason_codes
+            if isinstance(error, _SelectionPoolError)
+            else (reason_code,)
+        )
         try:
             strategy = SelectionStrategy(arguments.strategy)
             local_now = now.astimezone(_SHANGHAI)
@@ -794,6 +870,7 @@ def main() -> int:
             repository.record_selection_failure(
                 scheduled_for=scheduled.astimezone(UTC),
                 reason_code=reason_code,
+                reason_codes=reason_codes,
                 occurred_at=now,
                 strategy=strategy,
             )
