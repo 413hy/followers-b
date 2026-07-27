@@ -263,7 +263,7 @@ def test_hourly_audit_passes_model_policy_despite_ignoring_user_config(
     assert "Simplified Chinese" in captured[-1]
 
 
-def test_automatic_repair_uses_high_model_and_workspace_write(
+def test_automatic_repair_uses_high_model_and_systemd_outer_sandbox(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,5 +297,26 @@ def test_automatic_repair_uses_high_model_and_workspace_write(
 
     assert "--ignore-user-config" in captured
     assert captured[captured.index("--model") + 1] == "gpt-5.6-sol"
-    assert captured[captured.index("--sandbox") + 1] == "workspace-write"
+    assert captured[captured.index("--sandbox") + 1] == "danger-full-access"
     assert "Simplified Chinese" in captured[-1]
+
+
+def test_automatic_repair_outer_systemd_sandbox_is_security_boundary() -> None:
+    unit = Path("deploy/systemd/aiq-copy-codex-repair.service").read_text(encoding="utf-8")
+
+    assert "NoNewPrivileges=yes" in unit
+    assert "ProtectSystem=full" in unit
+    assert "ProtectHome=read-only" in unit
+    assert "RestrictSUIDSGID=yes" in unit
+    assert "CapabilityBoundingSet=\n" in unit
+    assert (
+        "ReadWritePaths=/root/.codex /root/quantify/ai-quant-system/src "
+        "/root/quantify/ai-quant-system/tests /root/quantify/ai-quant-system/docs "
+        "/var/lib/ai-quant/codex /var/lib/ai-quant/evidence/copy-trading /run/systemd"
+        in unit
+    )
+    assert (
+        "InaccessiblePaths=/run/ai-quant-secrets "
+        "-/run/ai-quant-production-secrets /root/aiq-user-inputs"
+        in unit
+    )

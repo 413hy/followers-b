@@ -89,7 +89,12 @@ class CodexSystemRepairer:
                     "--ignore-rules",
                     *codex_model_arguments(),
                     "--sandbox",
-                    "workspace-write",
+                    # The repair process already runs inside a hardened systemd
+                    # namespace whose ReadWritePaths and InaccessiblePaths are
+                    # the security boundary. Codex's nested workspace sandbox
+                    # requires a user namespace, which this unit deliberately
+                    # cannot create under NoNewPrivileges/RestrictSUIDSGID.
+                    "danger-full-access",
                     "--cd",
                     str(self._repository_root),
                     "--output-schema",
